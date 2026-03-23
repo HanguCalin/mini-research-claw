@@ -2,12 +2,12 @@ import { useState } from "react";
 import { Save, Key, Cpu, Shield } from "lucide-react";
 
 const inputClass =
-  "w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent transition-colors";
+  "w-full rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary transition-colors focus:border-accent focus:outline-none";
 
 function Section({ icon: Icon, title, children }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 overflow-hidden">
-      <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-border bg-surface-2">
+    <div className="panel-soft overflow-hidden rounded-[24px]">
+      <div className="flex items-center gap-2.5 border-b border-border bg-black/10 px-5 py-4">
         <Icon size={15} className="text-text-muted" />
         <h2 className="text-sm font-medium text-text-primary">{title}</h2>
       </div>
@@ -49,8 +49,11 @@ export default function Settings() {
   return (
     <div className="max-w-2xl space-y-8 animate-slide-in">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="text-sm text-text-secondary mt-1">
+        <p className="section-kicker">Configuration</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+          Settings
+        </h1>
+        <p className="mt-2 text-sm leading-7 text-text-secondary">
           Configure models, sandbox, and API credentials.
         </p>
       </div>
@@ -73,7 +76,7 @@ export default function Settings() {
 
       {/* Models */}
       <Section icon={Cpu} title="Agent Models">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           {[
             { key: "researcherModel", label: "Researcher Agent" },
             { key: "coderModel", label: "Coder Agent" },
@@ -119,7 +122,7 @@ export default function Settings() {
 
       {/* Sandbox */}
       <Section icon={Shield} title="Docker Sandbox">
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Sandbox Image">
             <input
               type="text"
@@ -146,10 +149,10 @@ export default function Settings() {
       {/* Save */}
       <button
         onClick={handleSave}
-        className={`flex items-center gap-2 px-6 py-3 rounded-xl font-semibold text-sm transition-all cursor-pointer ${
+        className={`flex cursor-pointer items-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold transition-all ${
           saved
             ? "bg-success-dim text-success"
-            : "bg-accent text-surface-0 hover:brightness-110"
+            : "bg-[linear-gradient(135deg,#67e8f9,#34d399)] text-surface-0 hover:-translate-y-0.5 hover:brightness-110"
         }`}
       >
         <Save size={16} />

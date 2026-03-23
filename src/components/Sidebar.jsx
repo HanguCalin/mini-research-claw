@@ -18,52 +18,69 @@ const links = [
 
 export default function Sidebar() {
   return (
-    <aside className="w-60 shrink-0 h-screen sticky top-0 bg-surface-1 border-r border-border flex flex-col">
+    <aside className="panel-soft panel-cyber mx-4 mt-4 flex h-auto shrink-0 flex-col sm:mx-6 lg:sticky lg:top-4 lg:ml-4 lg:h-[calc(100vh-2rem)] lg:w-72">
       {/* Brand */}
-      <div className="px-5 py-6 border-b border-border">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-accent-dim flex items-center justify-center">
+      <div className="border-b border-border px-5 py-6">
+        <div className="flex items-start gap-3">
+          <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-dim shadow-[0_0_28px_rgba(184,251,60,0.18)]">
             <Zap size={18} className="text-accent" />
           </div>
-          <div>
-            <h1 className="text-sm font-semibold text-text-primary tracking-tight leading-none">
+          <div className="flex-1">
+            <p className="section-kicker">Node 01</p>
+            <h1 className="mt-2 text-sm font-semibold tracking-tight text-text-primary leading-none">
               Research Claw
             </h1>
-            <span className="text-[11px] text-text-muted font-mono">
-              v0.1.0 — claude edition
-            </span>
+            <p className="mt-2 text-[11px] leading-relaxed text-text-secondary">
+              Autonomous pipeline cockpit
+            </p>
           </div>
         </div>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 flex flex-col gap-0.5">
+      <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
         {links.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
             end={to === "/"}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
+              `group flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-200 ${
                 isActive
-                  ? "bg-accent-dim text-accent"
-                  : "text-text-secondary hover:text-text-primary hover:bg-surface-2"
+                  ? "bg-[linear-gradient(135deg,rgba(184,251,60,0.16),rgba(184,251,60,0.04))] text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                  : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
               }`
             }
           >
-            <Icon size={18} strokeWidth={1.8} />
-            {label}
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/10 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-white/10">
+              <Icon size={18} strokeWidth={1.8} />
+            </div>
+            <div className="flex-1">
+              <div>{label}</div>
+              <div className="text-[10px] font-mono uppercase tracking-[0.18em] text-text-muted">
+                sector
+              </div>
+            </div>
+            <div className="text-[10px] font-mono text-text-muted">
+              /{label.slice(0, 2).toUpperCase()}
+            </div>
           </NavLink>
         ))}
       </nav>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-border">
-        <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
-          <span className="text-xs text-text-muted font-mono">
-            pipeline idle
-          </span>
+      <div className="border-t border-border px-5 py-4">
+        <div className="rounded-xl bg-black/10 px-3 py-3 ring-1 ring-white/5">
+          <div className="flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
+            <span className="text-xs font-mono text-text-muted">
+              pipeline idle
+            </span>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] font-mono text-text-muted">
+            <span>uptime 99.2%</span>
+            <span>queue 03</span>
+          </div>
         </div>
       </div>
     </aside>

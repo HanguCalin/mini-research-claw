@@ -24,9 +24,9 @@ const levelColors = {
 
 export default function LogPanel({ logs = sampleLogs, maxHeight = "400px" }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 overflow-hidden">
+    <div className="panel-soft panel-cyber overflow-hidden">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-border bg-surface-2">
+      <div className="flex items-center gap-2 border-b border-border bg-black/10 px-4 py-3">
         <Terminal size={14} className="text-text-muted" />
         <span className="text-xs font-mono text-text-muted">
           pipeline output
@@ -40,13 +40,13 @@ export default function LogPanel({ logs = sampleLogs, maxHeight = "400px" }) {
 
       {/* Log content */}
       <div
-        className="p-4 overflow-y-auto font-mono text-xs leading-relaxed"
+        className="overflow-y-auto bg-[linear-gradient(180deg,rgba(4,11,20,0.18),transparent)] p-4 font-mono text-xs leading-relaxed"
         style={{ maxHeight }}
       >
         {logs.map((log, i) => (
           <div
             key={i}
-            className="flex gap-3 py-0.5 animate-slide-in"
+            className="animate-slide-in flex gap-3 rounded-lg px-2 py-1.5 hover:bg-white/3"
             style={{ animationDelay: `${i * 40}ms` }}
           >
             <span className="text-text-muted shrink-0">{log.time}</span>

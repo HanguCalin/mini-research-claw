@@ -67,17 +67,20 @@ export default function History() {
   return (
     <div className="space-y-8 animate-slide-in">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">History</h1>
-        <p className="text-sm text-text-secondary mt-1">
+        <p className="section-kicker">Archive</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+          History
+        </h1>
+        <p className="mt-2 text-sm leading-7 text-text-secondary">
           Browse past research pipeline runs.
         </p>
       </div>
 
       {/* Runs table */}
-      <div className="rounded-xl border border-border bg-surface-1 overflow-hidden">
+      <div className="panel-soft panel-cyber overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-border bg-surface-2 text-text-muted text-xs uppercase tracking-wider">
+            <tr className="border-b border-border bg-black/10 text-xs uppercase tracking-wider text-text-muted">
               <th className="text-left px-5 py-3 font-medium">Status</th>
               <th className="text-left px-5 py-3 font-medium">Topic</th>
               <th className="text-left px-5 py-3 font-medium">Papers</th>
@@ -94,7 +97,7 @@ export default function History() {
               return (
                 <tr
                   key={run.id}
-                  className="border-b border-border last:border-0 hover:bg-surface-2/50 transition-colors"
+                  className="border-b border-border last:border-0 transition-colors hover:bg-white/3"
                 >
                   <td className="px-5 py-4">
                     <span

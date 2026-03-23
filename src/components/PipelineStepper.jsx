@@ -78,19 +78,18 @@ const agents = [
 
 export default function PipelineStepper({ agentStates = {} }) {
   return (
-    <div className="flex items-start gap-3">
+    <div className="flex min-w-max items-start gap-3">
       {agents.map((agent, i) => {
         const status = agentStates[agent.id] || "idle";
         const s = statusStyles[status];
         const Icon = agent.icon;
-        const isRetry =
-          agent.id === "executor" && status === "retrying";
+        const isRetry = agent.id === "executor" && status === "retrying";
 
         return (
           <div key={agent.id} className="flex items-start gap-3">
             {/* Agent Card */}
             <div
-              className={`relative flex flex-col items-center gap-3 p-5 rounded-xl border-2 ${s.ring} ${s.bg} w-44 transition-all duration-300`}
+              className={`panel-cyber relative flex w-48 flex-col items-center gap-3 border-2 p-5 transition-all duration-300 ${s.ring} ${s.bg}`}
               style={
                 status === "running" || status === "retrying"
                   ? {
@@ -102,8 +101,9 @@ export default function PipelineStepper({ agentStates = {} }) {
                   : undefined
               }
             >
+              <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
               <div
-                className={`w-11 h-11 rounded-full border ${s.ring} flex items-center justify-center ${s.bg}`}
+                className={`flex h-12 w-12 items-center justify-center rounded-full border ${s.ring} ${s.bg}`}
               >
                 {isRetry ? (
                   <RotateCcw size={20} className={s.text} />
@@ -115,7 +115,7 @@ export default function PipelineStepper({ agentStates = {} }) {
                 <p className="text-sm font-semibold text-text-primary">
                   {agent.name}
                 </p>
-                <p className="text-[11px] font-mono text-text-muted mt-0.5">
+                <p className="mt-0.5 text-[11px] font-mono text-text-muted">
                   {agent.model}
                 </p>
               </div>
