@@ -2,7 +2,7 @@
 
 ## Full Implementation & Development Process Plan
 
-This document outlines the complete plan for building a 4-stage autonomous research pipeline driven by Claude AI agents, along with the full AI-assisted software development process required for a maximum grade.
+This document outlines the complete plan for building a 4-stage autonomous research pipeline driven by Claude AI agents, along with the full AI-assisted software development process.
 
 ---
 
@@ -28,13 +28,13 @@ Mini-Research-Claw is an autonomous research assistant that takes a natural-lang
 
 The system uses LangGraph for multi-agent orchestration and leverages multiple Claude models optimized per task. A Docker sandbox ensures safe code execution.
 
-**Key Constraint:** This project is not a web application — it is a CLI/desktop-based AI agent pipeline, clearly distinct from any "Web Application Development" coursework.
+**Key Constraint:** This project is a CLI/desktop-based AI agent pipeline.
 
 ---
 
 ## 2. AI Agents Architecture
 
-The system includes **4 agents, of which 3 are AI-powered** (satisfying the minimum 2 AI agents requirement).
+The system includes **4 agents, of which 3 are AI-powered**.
 
 ### Agent 1: The Researcher Agent (AI)
 
@@ -102,7 +102,7 @@ US-10, US-11 — Model configuration, timestamped outputs, final integration tes
 
 ## 4. Diagrams
 
-All diagrams below should be generated using AI tools (e.g., Claude for Mermaid syntax, ChatGPT for PlantUML). Include the following in the repository under a `docs/diagrams/` directory.
+All diagrams are stored in the repository under the `docs/diagrams/` directory.
 
 ### 4.1 Component Architecture Diagram
 
@@ -243,7 +243,7 @@ mini-research-claw/
 
 ### 6.3 Commit Requirements
 
-- Minimum **5 commits per student** (aim for 15+ across the project).
+- Conventional commit style with frequent, meaningful commits.
 - Conventional commit messages: `feat:`, `fix:`, `test:`, `docs:`, `ci:`.
 - Every feature branch merged via **Pull Request** with at least one reviewer.
 - Use **rebase** to keep feature branches up to date with `develop`; use **merge commits** when merging PRs into `develop`.
@@ -385,7 +385,7 @@ File: `.github/workflows/ci.yml`
 
 ## 11. Report on AI Tool Usage During Development
 
-This section will become a standalone document (`docs/ai-usage-report.md`) detailing how AI tools were used throughout every phase of development.
+This section documents how AI tools were used throughout every phase of development. The full report is available at `docs/ai-usage-report.md`.
 
 ### 11.1 Areas of AI Usage
 
@@ -421,20 +421,16 @@ The final `ai-usage-report.md` will include, for each area:
 
 ---
 
-## Grading Checklist (Self-Assessment)
+## Project Status Summary
 
-| Criterion                                        | Section(s)   | Status  |
-| ------------------------------------------------ | ------------ | ------- |
-| **A. Implementation**                            |              |         |
-| Live demo                                        | §10.1        | Planned |
-| ≥ 2 AI agents in implementation                  | §2 (3 AI agents: Researcher, Coder, Writer) | Covered |
-| Offline demo (screencast / YouTube)              | §10.2        | Planned |
-| Topic is NOT from Web App Dev course             | §1           | Confirmed |
-| **B. AI-Assisted Development Process**           |              |         |
-| User stories (≥ 10) + backlog — 2 pts            | §3 (12 stories, 4 sprints) | Covered |
-| Diagrams (UML, architecture, workflows) — 1 pt   | §4 (5 diagrams) | Covered |
-| Git (branches, merge/rebase, PRs, ≥ 5 commits) — 1 pt | §6     | Covered |
-| Automated tests + agent evals — 2 pts            | §7 (unit, integration, 6 evals) | Covered |
-| Bug reporting + resolution via PR — 1 pt          | §8 (template, ≥ 3 bugs, ≥ 3 PRs) | Covered |
-| CI/CD pipeline — 1 pt                            | §9 (GitHub Actions CI + CD) | Covered |
-| Report on AI tool usage — 2 pts                  | §11 (10 areas, metrics, reflections) | Covered |
+| Area | Section | Status |
+| ---- | ------- | ------ |
+| AI Agents (3 AI-powered + 1 non-AI) | §2 | Planned |
+| User Stories (12) + Product Backlog (4 sprints) | §3 | Planned |
+| Diagrams (5 total) | §4 | Planned |
+| Git Strategy (branches, PRs, conventional commits) | §6 | Planned |
+| Automated Tests + Agent Evals (6 evals) | §7 | Planned |
+| Bug Reporting + Resolution via PR | §8 | Planned |
+| CI/CD Pipeline (GitHub Actions) | §9 | Planned |
+| AI Usage Report (10 areas + metrics) | §11 | Planned |
+| Live Demo + Screencast | §10 | Planned |
