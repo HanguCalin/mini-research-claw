@@ -34,23 +34,26 @@ export default function Logs() {
   return (
     <div className="space-y-8 animate-slide-in">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Logs</h1>
-        <p className="text-sm text-text-secondary mt-1">
+        <p className="section-kicker">Trace View</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+          Logs
+        </h1>
+        <p className="mt-2 text-sm leading-7 text-text-secondary">
           Full pipeline output with API call details.
         </p>
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="panel-soft panel-cyber flex flex-wrap items-center gap-3 px-4 py-3">
         <Filter size={14} className="text-text-muted" />
         {agents.map((a) => (
           <button
             key={a}
             onClick={() => setFilter(a)}
-            className={`text-xs font-mono px-3 py-1.5 rounded-full border transition-all cursor-pointer ${
+            className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs font-mono transition-all ${
               filter === a
-                ? "border-accent bg-accent-dim text-accent"
-                : "border-border bg-surface-2 text-text-secondary hover:text-text-primary"
+                ? "border-accent bg-accent-dim text-accent shadow-[0_0_24px_rgba(103,232,249,0.14)]"
+                : "border-border bg-black/10 text-text-secondary hover:text-text-primary"
             }`}
           >
             {a}

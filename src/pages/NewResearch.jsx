@@ -20,19 +20,20 @@ export default function NewResearch() {
   });
 
   return (
-    <div className="max-w-2xl space-y-8 animate-slide-in">
+    <div className="max-w-3xl space-y-8 animate-slide-in">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
+        <p className="section-kicker">Launch Pad</p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
           New Research
         </h1>
-        <p className="text-sm text-text-secondary mt-1">
+        <p className="mt-2 text-sm leading-7 text-text-secondary">
           Enter a research topic and the AI agents will handle the rest.
         </p>
       </div>
 
       {/* Topic input */}
-      <div className="space-y-3">
+      <div className="panel-soft panel-cyber space-y-4 p-6">
         <label className="text-sm font-medium text-text-secondary">
           Research Topic
         </label>
@@ -42,7 +43,7 @@ export default function NewResearch() {
             onChange={(e) => setTopic(e.target.value)}
             placeholder="Describe what you want to research..."
             rows={3}
-            className="w-full bg-surface-1 border border-border rounded-xl px-4 py-3 text-sm text-text-primary placeholder-text-muted resize-none focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/30 transition-all"
+            className="w-full rounded-2xl border border-border bg-black/10 px-4 py-4 text-sm text-text-primary placeholder-text-muted resize-none shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           />
           <Sparkles
             size={16}
@@ -56,7 +57,7 @@ export default function NewResearch() {
             <button
               key={i}
               onClick={() => setTopic(t)}
-              className="text-xs px-3 py-1.5 rounded-full border border-border bg-surface-2 text-text-secondary hover:text-accent hover:border-accent/40 transition-all cursor-pointer"
+              className="cursor-pointer rounded-full border border-border bg-black/10 px-3 py-2 text-xs text-text-secondary transition-all hover:border-accent/40 hover:text-accent"
             >
               {t.length > 50 ? t.slice(0, 50) + "…" : t}
             </button>
@@ -67,7 +68,7 @@ export default function NewResearch() {
       {/* Advanced config toggle */}
       <button
         onClick={() => setShowAdvanced(!showAdvanced)}
-        className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors cursor-pointer"
+        className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
       >
         <ChevronDown
           size={16}
@@ -77,7 +78,7 @@ export default function NewResearch() {
       </button>
 
       {showAdvanced && (
-        <div className="grid grid-cols-2 gap-4 p-5 rounded-xl border border-border bg-surface-1 animate-slide-in">
+        <div className="panel-soft panel-cyber grid gap-4 p-5 animate-slide-in sm:grid-cols-2">
           {/* Model selectors */}
           {[
             { key: "researcherModel", label: "Researcher Model" },
@@ -93,7 +94,7 @@ export default function NewResearch() {
                 onChange={(e) =>
                   setConfig((c) => ({ ...c, [key]: e.target.value }))
                 }
-                className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent appearance-none cursor-pointer"
+                className="w-full cursor-pointer appearance-none rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
               >
                 <option value="haiku">Claude 3.5 Haiku</option>
                 <option value="sonnet">Claude 3.7 Sonnet</option>
@@ -117,7 +118,7 @@ export default function NewResearch() {
                   maxRetries: parseInt(e.target.value) || 3,
                 }))
               }
-              className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
+              className="w-full rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
             />
           </div>
 
@@ -137,7 +138,7 @@ export default function NewResearch() {
                   maxPapers: parseInt(e.target.value) || 5,
                 }))
               }
-              className="w-full bg-surface-2 border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent"
+              className="w-full rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
             />
           </div>
         </div>
@@ -146,7 +147,7 @@ export default function NewResearch() {
       {/* Submit */}
       <button
         disabled={!topic.trim()}
-        className="flex items-center gap-2 px-6 py-3 rounded-xl bg-accent text-surface-0 font-semibold text-sm hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition-all cursor-pointer"
+        className="flex cursor-pointer items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#67e8f9,#34d399)] px-6 py-3 text-sm font-semibold text-surface-0 shadow-[0_18px_40px_rgba(52,211,153,0.16)] transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Zap size={16} />
         Launch Pipeline

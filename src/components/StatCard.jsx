@@ -1,9 +1,11 @@
 export default function StatCard({ icon: Icon, label, value, sub, accent = false }) {
   return (
-    <div className="flex items-start gap-4 p-5 rounded-xl border border-border bg-surface-1 hover:border-border-bright transition-colors">
+    <div className="panel-soft panel-cyber group relative p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-border-bright">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+      <div className="flex items-start gap-4">
       <div
-        className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
-          accent ? "bg-accent-dim" : "bg-surface-2"
+        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-white/8 ${
+          accent ? "bg-accent-dim shadow-[0_0_32px_rgba(103,232,249,0.16)]" : "bg-surface-2"
         }`}
       >
         <Icon
@@ -13,13 +15,14 @@ export default function StatCard({ icon: Icon, label, value, sub, accent = false
         />
       </div>
       <div>
-        <p className="text-2xl font-semibold text-text-primary tracking-tight">
+        <p className="text-3xl font-semibold tracking-tight text-text-primary">
           {value}
         </p>
         <p className="text-xs text-text-secondary mt-0.5">{label}</p>
         {sub && (
           <p className="text-[11px] text-text-muted font-mono mt-1">{sub}</p>
         )}
+      </div>
       </div>
     </div>
   );
