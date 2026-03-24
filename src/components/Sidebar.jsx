@@ -22,7 +22,7 @@ export default function Sidebar() {
       {/* Brand */}
       <div className="border-b border-border px-5 py-6">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-dim shadow-[0_0_28px_rgba(184,251,60,0.18)]">
+          <div className="accent-glow mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-dim">
             <Zap size={18} className="text-accent" />
           </div>
           <div className="flex-1">
@@ -47,7 +47,7 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `group flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition-all duration-200 ${
                 isActive
-                  ? "bg-[linear-gradient(135deg,rgba(184,251,60,0.16),rgba(184,251,60,0.04))] text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
+                  ? "nav-active text-text-primary"
                   : "text-text-secondary hover:bg-surface-2 hover:text-text-primary"
               }`
             }

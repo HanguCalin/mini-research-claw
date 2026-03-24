@@ -5,7 +5,7 @@ export default function StatCard({ icon: Icon, label, value, sub, accent = false
       <div className="flex items-start gap-4">
       <div
         className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-white/8 ${
-          accent ? "bg-accent-dim shadow-[0_0_32px_rgba(103,232,249,0.16)]" : "bg-surface-2"
+          accent ? "accent-glow-strong bg-accent-dim" : "bg-surface-2"
         }`}
       >
         <Icon

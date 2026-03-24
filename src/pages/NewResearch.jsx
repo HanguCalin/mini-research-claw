@@ -147,7 +147,7 @@ export default function NewResearch() {
       {/* Submit */}
       <button
         disabled={!topic.trim()}
-        className="flex cursor-pointer items-center gap-2 rounded-2xl bg-[linear-gradient(135deg,#67e8f9,#34d399)] px-6 py-3 text-sm font-semibold text-surface-0 shadow-[0_18px_40px_rgba(52,211,153,0.16)] transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+        className="action-primary flex cursor-pointer items-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold text-surface-0 transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
       >
         <Zap size={16} />
         Launch Pipeline
