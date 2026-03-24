@@ -152,7 +152,7 @@ export default function Settings() {
         className={`flex cursor-pointer items-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold transition-all ${
           saved
             ? "bg-success-dim text-success"
-            : "bg-[linear-gradient(135deg,#67e8f9,#34d399)] text-surface-0 hover:-translate-y-0.5 hover:brightness-110"
+            : "action-primary text-surface-0 hover:-translate-y-0.5 hover:brightness-110"
         }`}
       >
         <Save size={16} />
