@@ -43,6 +43,10 @@ The system consists of 9 sequential nodes, with 7 AI-powered agents and 2 non-AI
 - **Model:** None — pure Python logic.
 - **Tools:** A Python script using the `arxiv` library and arXiv's HTML endpoints or LaTeX source parsing.
 - **Responsibility:** Query arXiv based on the user's prompt. Instead of stopping at abstracts, it fetches the full text of the top 3–5 papers and extracts the `Methodology`, `Implementation`, and `Results` sections. Writes results to `arxiv_papers_full_text` in the state.
+- **Security & Compliance:**
+  - Enforces a strict `time.sleep(3)` between consecutive arXiv API/HTTP requests to comply with arXiv's Terms of Service and prevent rate-limiting or IP bans.
+  - Parsed full-text content is kept in memory only — no PDFs are saved to disk for redistribution.
+  - Paper metadata (authors, year, title, arXiv ID) is preserved for BibTeX generation downstream.
 
 #### Node 2: Deep KG Extractor (AI)
 
@@ -53,15 +57,16 @@ The system consists of 9 sequential nodes, with 7 AI-powered agents and 2 non-AI
 #### Node 3: Hypothesis Generator (AI)
 
 - **Model:** Claude 3.7 Sonnet (advanced reasoning for hypothesis formulation).
-- **Responsibility:** Formulate a highly specific, testable research hypothesis strictly grounded in the technical entities extracted into the deep KG. The hypothesis is validated against the KG entities to prevent hallucination.
+- **System Prompt:** "Formulate a highly specific, testable research hypothesis strictly grounded in the technical entities extracted into the Knowledge Graph. When referencing datasets, you MUST use real, verifiable, public dataset IDs from the Hugging Face Hub (e.g., `imdb`, `glue`, `squad`) or scikit-learn. Do NOT hallucinate dataset names or local file paths."
+- **Responsibility:** Formulate a highly specific, testable research hypothesis strictly grounded in the technical entities extracted into the deep KG. The hypothesis is validated against the KG entities to prevent hallucination. Dataset references default to the Hugging Face Hub ecosystem.
 
 ### Phase 2: Autonomous Experimentation & Self-Healing
 
 #### Node 4: ML Coder (AI)
 
 - **Model:** Claude 3.7 Sonnet (advanced reasoning and software engineering).
-- **System Prompt:** "You are an expert data scientist. Read the validated hypothesis and the rich KG with actual implementation details. Write a self-contained Python script using standard libraries (scikit-learn, pandas) to train and evaluate a model on a public dataset. Save results to `metrics.json`. Output ONLY valid Python code."
-- **Responsibility:** Receive the hypothesis and the rich KG. Armed with actual implementation details (not just abstract concepts), generate a robust Python script (`experiment.py`) to train and evaluate a model, saving results (accuracy, F1-score, execution time, etc.) into `metrics.json`.
+- **System Prompt:** "You are an expert data scientist. Read the validated hypothesis and the rich KG with actual implementation details. Write a self-contained, methodologically rigorous Python script. You MUST: (1) explicitly separate train and test data to prevent data leakage; (2) use cross-validation where applicable; (3) set random seeds (e.g., `random_state=42`) for full reproducibility; (4) use real, verifiable, public dataset IDs from Hugging Face Hub (e.g., `load_dataset('imdb')`) or scikit-learn — do NOT hallucinate local file paths or custom dataset names; (5) save a detailed log of all hyperparameters used alongside evaluation metrics into `metrics.json`. Output ONLY valid Python code."
+- **Responsibility:** Receive the hypothesis and the rich KG. Armed with actual implementation details (not just abstract concepts), generate a robust Python script (`experiment.py`) to train and evaluate a model with methodologically rigorous ML practices (train/test split, cross-validation, reproducible seeds, hyperparameter logging), saving results into `metrics.json`. Defaults to the Hugging Face `datasets` library for data loading and `transformers`/`huggingface_hub` for pre-trained models where applicable.
 
 #### Node 5: Executor Sandbox (Non-AI)
 
@@ -69,33 +74,35 @@ The system consists of 9 sequential nodes, with 7 AI-powered agents and 2 non-AI
 - **Responsibility:** Run `experiment.py` in an isolated environment (Docker/Subprocess) and route based on outcome:
   - **Error:** Send the stack trace back to **Node 4**. The Coder performs self-reflection ("Why did the code fail?") and rewrites the code (loop allowed up to 3 times).
   - **Success:** Save the results into `metrics_json` in the state and proceed to the next phase.
+- **Docker Hardening:**
+  - Container runs in rootless mode with `--security-opt=no-new-privileges` to drop unnecessary privileges.
+  - No volume mounts to the host's sensitive directories — only a temporary working directory is mounted.
+  - Network access is disabled (`--network=none`) to prevent data exfiltration from LLM-generated code.
 
 ### Phase 3: Paper Drafting
 
 #### Node 6: Academic Writer (AI)
 
 - **Model:** Claude 3.7 Sonnet (excellent at academic tone and long-context synthesis).
-- **System Prompt:** "You are an academic writer. Synthesize the full-text literature, the hypothesis, and the experiment metrics to write an academic paper directly in LaTeX, following the IMRaD structure (Introduction, Methods, Results, Conclusion), along with a bibliography file."
-- **Responsibility:** Synthesize the full-text literature, the hypothesis, and `metrics_json` results to write the first draft of the paper directly in **LaTeX** (`draft.tex`), following the IMRaD structure, along with a bibliography file (`references.bib`). Writes to `latex_draft` and `bibtex_source` in the state.
+- **System Prompt:** "You are an academic writer. Synthesize the full-text literature, the hypothesis, and the experiment metrics to write an academic paper directly in LaTeX, following the IMRaD structure (Introduction, Methods, Results, Conclusion). You MUST ground your technical claims in the provided Knowledge Graph, but do NOT use raw IDs or inline provenance tags (like '[Source: arXiv:...]'). Instead, use standard LaTeX citation commands (e.g., `\cite{AuthorYear}`) seamlessly in the text. You MUST also generate a corresponding `references.bib` file containing the BibTeX entries for all papers in the Knowledge Graph. Ensure the bibliography is rendered at the bottom of the final NeurIPS paper via `\bibliography{references}`. Do not state information as absolute truth if it cannot be traced back to the literature context."
+- **Responsibility:** Synthesize the full-text literature, the hypothesis, and `metrics_json` results to write the first draft of the paper directly in **LaTeX** (`draft.tex`), following the IMRaD structure. Generate a companion `references.bib` with proper BibTeX entries (using paper metadata: authors, year, title, arXiv ID from the state). All citations use `\cite{AuthorYear}` — no raw arXiv IDs in prose. Writes to `latex_draft` and `bibtex_source` in the state.
 
-### Phase 4: The Peer Review Panel (Automated Evals)
+### Phase 4: Critique & Linting Engine (Automated Quality Assurance)
 
-The drafted LaTeX is evaluated by an ensemble of agents mimicking a NeurIPS review committee.
+The drafted LaTeX is evaluated by an ensemble of agents acting as a critique and linting engine. Rather than binary PASS/FAIL votes, each agent returns a structured list of warnings that the Writer must address in exactly one mandatory revision pass.
 
-#### Node 7: Review Panel (AI — 3x Claude 3.5 Haiku)
+#### Node 7: Critique Panel (AI — 3x Claude 3.5 Haiku)
 
-Three independent agents read the `draft.tex` and evaluate it:
+Three independent agents read the `draft.tex` and produce structured warnings:
 
-- **Agent A (The Fact-Checker):** Ensures no algorithms, mathematical formulas, or datasets were hallucinated by cross-referencing the draft with the deep Phase 1 Knowledge Graph.
-- **Agent B (The Methodologist):** Evaluates if the code results in `metrics.json` logically support the conclusions drawn in the text.
-- **Agent C (The Formatter):** Checks for "AI-slop" writing style, excessive verbosity, and verifies LaTeX structural integrity.
+- **Agent A (The Fact-Checker):** Cross-references the draft with the deep Phase 1 Knowledge Graph. Returns warnings for any algorithms, mathematical formulas, datasets, or claims that cannot be traced back to the KG. Example: `{"warnings": ["Claim X is not supported by metrics", "Dataset Z not found in KG"]}`.
+- **Agent B (The Methodologist):** Evaluates if the code results in `metrics.json` logically support the conclusions drawn in the text. Flags unsupported claims, missing error bars, or unjustified generalizations. Example: `{"warnings": ["Accuracy improvement of 2% claimed as 'significant' without statistical test"]}`.
+- **Agent C (The Formatter):** Checks for "AI-slop" writing style, excessive verbosity, missing NeurIPS checklist items, and verifies LaTeX structural integrity. Example: `{"warnings": ["Missing NeurIPS checklist", "Section 3 exceeds recommended length"]}`.
 
-#### Node 8: Vote Aggregator & Revision Loop (Non-AI)
+#### Node 8: Critique Aggregator & Mandatory Revision (Non-AI)
 
 - **Model:** None — pure Python logic.
-- **Responsibility:** Each reviewer outputs a `PASS` or `FAIL` vote with a `reasoning` justification. The aggregator decides:
-  - **Majority PASS (≥ 2 votes):** The draft is approved. Proceed to the LaTeX Compiler.
-  - **Majority FAIL:** The aggregated peer-review feedback is routed back to **Node 6 (Academic Writer)**. The Writer must revise `draft.tex` and submit it for a new round of review (max 2 revision rounds).
+- **Responsibility:** Aggregates all warnings from the 3 critique agents into a single structured feedback list. The aggregated warnings are always routed back to **Node 6 (Academic Writer)** for exactly **one mandatory revision pass**. The Writer must address the critique, produce a revised `draft.tex`, and append a "Confidence Score" (self-assessed 1–10) and the NeurIPS reproducibility checklist to the final draft. No further review rounds occur — the revised draft proceeds directly to the LaTeX Compiler.
 
 ### Phase 5: Publication
 
@@ -103,6 +110,7 @@ Three independent agents read the `draft.tex` and evaluate it:
 
 - **Model:** None — pure Python logic.
 - **Responsibility:** Execute system commands `pdflatex` and `bibtex` to compile the approved LaTeX source into the final two-column NeurIPS-formatted PDF, ready for download. Writes the output path to `final_pdf_path` in the state.
+- **LaTeX Security:** Uses `subprocess.run(['pdflatex', '--no-shell-escape', 'main.tex'], ...)` to explicitly disable shell escapes, preventing malicious code execution from LLM-generated LaTeX content.
 
 ---
 
@@ -119,8 +127,8 @@ Three independent agents read the `draft.tex` and evaluate it:
 | US-05 | As a researcher, I want all generated code to run in a sandboxed Docker container so that my local machine is protected from arbitrary execution. | Must Have | 5 |
 | US-06 | As a researcher, I want the system to automatically retry failed code up to 3 times with error feedback so that transient or fixable errors are self-healed. | Must Have | 5 |
 | US-07 | As a researcher, I want an Academic Writer Agent to draft the paper in LaTeX (IMRaD format) so that I receive a structured first draft. | Must Have | 5 |
-| US-08 | As a researcher, I want a 3-agent Peer Review Panel (Fact-Checker, Methodologist, Formatter) to evaluate the draft and vote PASS/FAIL so that quality is ensured before compilation. | Must Have | 8 |
-| US-09 | As a researcher, I want the Writer to revise the draft based on aggregated peer-review feedback (up to 2 revision rounds) so that the final paper meets quality standards. | Must Have | 5 |
+| US-08 | As a researcher, I want a 3-agent Critique & Linting Panel (Fact-Checker, Methodologist, Formatter) to produce structured warnings on the draft so that quality issues are identified before compilation. | Must Have | 8 |
+| US-09 | As a researcher, I want the Writer to perform one mandatory revision pass addressing critique warnings, appending a Confidence Score and NeurIPS checklist, so that the final paper meets quality standards. | Must Have | 5 |
 | US-10 | As a researcher, I want the approved LaTeX to be compiled into a two-column NeurIPS-formatted PDF so that I receive a publication-ready paper. | Must Have | 3 |
 | US-11 | As a researcher, I want to see a progress log in the terminal showing which agent is currently active so that I can monitor the pipeline's state. | Should Have | 3 |
 | US-12 | As a researcher, I want the system to output a failure report if all retries are exhausted so that I understand what went wrong. | Should Have | 3 |
@@ -139,7 +147,7 @@ US-01, US-05, US-15 — CLI entry point, Docker sandbox setup, logging infrastru
 US-02, US-03, US-04 — Full-text ArXiv retrieval, deep KG extraction, hypothesis generation with anti-hallucination eval.
 
 **Sprint 3 — Orchestration & Resilience (Week 3):**
-US-06, US-07, US-08, US-09, US-11, US-12 — Self-healing loop, Academic Writer (LaTeX draft), Peer Review Panel, revision loop, progress display, failure reports.
+US-06, US-07, US-08, US-09, US-11, US-12 — Self-healing loop, Academic Writer (LaTeX draft), Critique & Linting Panel, mandatory revision, progress display, failure reports.
 
 **Sprint 4 — Publication & Polish (Week 4):**
 US-10, US-13, US-14 — LaTeX compilation, model configuration, timestamped outputs, final integration testing.
@@ -181,20 +189,21 @@ Phase 2: Experimentation                                       │
 Phase 3: Paper Drafting                                          │
                                                         [Academic Writer]
                                                                  │
-Phase 4: Peer Review                                             │
-                                                        [Review Panel (3 agents)]
-                                                          A: Fact-Checker
-                                                          B: Methodologist
-                                                          C: Formatter
+Phase 4: Critique & Linting                                      │
+                                                        [Critique Panel (3 agents)]
+                                                          A: Fact-Checker (warnings)
+                                                          B: Methodologist (warnings)
+                                                          C: Formatter (warnings)
                                                                  │
-                                                        [Vote Aggregator]
-                                                            │         │
-                                                      ≥2 PASS    ≥2 FAIL
-                                                            │         │
-                                                            ▼         ▼
-                                                        approved   [Academic Writer]
-                                                            │      (revise, max 2 rounds)
-Phase 5: Publication                                        │
+                                                        [Critique Aggregator]
+                                                                 │
+                                                                 ▼
+                                                        [Academic Writer]
+                                                        (1 mandatory revision)
+                                                        + Confidence Score
+                                                        + NeurIPS Checklist
+                                                                 │
+Phase 5: Publication                                             │
                                                      [LaTeX Compiler]
                                                             │
                                                             ▼
@@ -225,11 +234,11 @@ Illustrates the message flow between User → CLI → LangGraph → each Node (F
 │ + metrics_json: str                            │
 │ + code_retry_count: int                        │
 ├────────────────────────────────────────────────┤
-│  Phase 3 & 4: Drafting and Peer Review         │
+│  Phase 3 & 4: Drafting and Critique             │
 │ + latex_draft: str                             │
 │ + bibtex_source: str                           │
-│ + peer_review_feedback: List[Dict[str, str]]   │
-│ + revision_round: int                          │
+│ + critique_warnings: List[Dict[str, str]]      │
+│ + confidence_score: float                      │
 ├────────────────────────────────────────────────┤
 │  Phase 5: Output                               │
 │ + final_pdf_path: str                          │
@@ -251,8 +260,8 @@ Shows: Host machine, Docker daemon, Python virtual environment, API calls to Ant
 ### Phase 1: Environment & Infrastructure Setup
 
 1. Initialize a clean Python project with `pyproject.toml` or `requirements.txt`.
-2. Install core dependencies: `anthropic`, `langgraph`, `arxiv`, `docker`.
-3. Create a `Dockerfile` with a base Python image and data science libraries (pandas, scikit-learn, numpy).
+2. Install core dependencies: `anthropic`, `langgraph`, `arxiv`, `docker`, `datasets`, `huggingface_hub`.
+3. Create a `Dockerfile` with a base Python image and data science libraries (pandas, scikit-learn, numpy, datasets, huggingface_hub, transformers).
 4. Install LaTeX toolchain (`texlive`, `pdflatex`, `bibtex`) in the build environment.
 5. Store `ANTHROPIC_API_KEY` securely in a `.env` file (excluded from git via `.gitignore`).
 
@@ -275,11 +284,11 @@ class AutoResearchState(TypedDict):
     metrics_json: str
     code_retry_count: int
 
-    # Phase 3 & 4: Drafting and Peer Review
+    # Phase 3 & 4: Drafting and Critique
     latex_draft: str
     bibtex_source: str
-    peer_review_feedback: List[Dict[str, str]]
-    revision_round: int
+    critique_warnings: List[Dict[str, str]]    # Warnings from 3-agent critique panel
+    confidence_score: float                     # Writer's self-assessed confidence (1-10)
 
     # Phase 5: Output
     final_pdf_path: str
@@ -298,8 +307,8 @@ class AutoResearchState(TypedDict):
 | `code_retry_count`      | int                     | Tracks code retry attempts (max 3).                                |
 | `latex_draft`           | str                     | The LaTeX draft source code (`draft.tex`).                         |
 | `bibtex_source`         | str                     | The generated bibliography (`references.bib`).                     |
-| `peer_review_feedback`  | List[Dict[str, str]]    | Review votes and reasoning from the 3-agent panel.                 |
-| `revision_round`        | int                     | Tracks paper revision rounds (max 2).                              |
+| `critique_warnings`     | List[Dict[str, str]]    | Structured warnings from the 3-agent critique panel.               |
+| `confidence_score`      | float                   | Writer's self-assessed confidence score (1–10) after revision.     |
 | `final_pdf_path`        | str                     | Path to the compiled NeurIPS-formatted PDF.                        |
 
 ### Phase 3: Build the Nodes
@@ -311,8 +320,8 @@ Implement each of the 9 nodes as described in Section 2 above, each in its own P
 - `ml_coder.py` — Experiment code generation with KG context (AI)
 - `executor.py` — Docker sandbox runner (non-AI)
 - `academic_writer.py` — LaTeX/BibTeX draft generation (AI)
-- `review_panel.py` — 3-agent peer review: Fact-Checker, Methodologist, Formatter (AI)
-- `vote_aggregator.py` — Vote aggregation and revision routing (non-AI)
+- `critique_panel.py` — 3-agent critique & linting: Fact-Checker, Methodologist, Formatter (AI)
+- `critique_aggregator.py` — Warning aggregation and mandatory revision routing (non-AI)
 - `latex_compiler.py` — PDF compilation (non-AI)
 
 ### Phase 4: Orchestration with LangGraph
@@ -327,18 +336,14 @@ Implement each of the 9 nodes as described in Section 2 above, each in its own P
    - Success → Academic Writer.
    - Failure (code_retry_count < 3) → ML Coder (self-healing loop).
    - Failure (code_retry_count ≥ 3) → END (failure report).
-6. Define Phase 3 edge: Academic Writer → Review Panel.
-7. Define Phase 4 edges: Review Panel → Vote Aggregator.
-8. Define conditional edges at Vote Aggregator:
-   - Majority PASS (≥ 2 votes) → LaTeX Compiler.
-   - Majority FAIL (revision_round < 2) → Academic Writer (revision loop).
-   - Majority FAIL (revision_round ≥ 2) → LaTeX Compiler (compile best effort).
-9. Define Phase 5 edge: LaTeX Compiler → END.
+6. Define Phase 3 edge: Academic Writer → Critique Panel.
+7. Define Phase 4 edges: Critique Panel → Critique Aggregator → Academic Writer (one mandatory revision pass).
+8. Define Phase 5 edge: Academic Writer (revised) → LaTeX Compiler → END.
 10. Compile and expose the graph via a `run_pipeline(topic: str)` function.
 
 ### Phase 5: Testing & Iteration
 
-1. **Happy Path:** "Compare the accuracy of a Random Forest vs. Logistic Regression on the Iris dataset."
+1. **Happy Path:** "Compare the accuracy of a Random Forest vs. Logistic Regression on the Hugging Face `imdb` sentiment dataset."
 2. **Forced Failure:** Inject a deliberate error (e.g., reference a non-installed library) to validate the self-healing retry loop.
 
 ---
@@ -357,8 +362,8 @@ mini-research-claw/
 │   │   ├── ml_coder.py
 │   │   ├── executor.py
 │   │   ├── academic_writer.py
-│   │   ├── review_panel.py
-│   │   ├── vote_aggregator.py
+│   │   ├── critique_panel.py
+│   │   ├── critique_aggregator.py
 │   │   └── latex_compiler.py
 │   ├── state.py
 │   ├── graph.py
@@ -370,15 +375,15 @@ mini-research-claw/
 │   ├── test_ml_coder.py
 │   ├── test_executor.py
 │   ├── test_academic_writer.py
-│   ├── test_review_panel.py
-│   ├── test_vote_aggregator.py
+│   ├── test_critique_panel.py
+│   ├── test_critique_aggregator.py
 │   ├── test_latex_compiler.py
 │   └── evals/
 │       ├── eval_kg_extractor.py
 │       ├── eval_hypothesis.py
 │       ├── eval_coder.py
 │       ├── eval_writer.py
-│       └── eval_review_panel.py
+│       └── eval_critique_panel.py
 ├── docs/
 │   ├── diagrams/
 │   └── ai-usage-report.md
@@ -423,8 +428,8 @@ mini-research-claw/
 | `test_ml_coder.py`              | Generated code is syntactically valid Python; contains required imports.             |
 | `test_executor.py`              | Docker container starts/stops; exit codes are captured correctly.                   |
 | `test_academic_writer.py`       | LaTeX draft is valid; contains IMRaD sections; BibTeX file is well-formed.          |
-| `test_review_panel.py`          | Each reviewer outputs valid PASS/FAIL vote with reasoning; 3 independent reviews.   |
-| `test_vote_aggregator.py`       | Majority vote logic is correct; revision routing works; max 2 rounds enforced.      |
+| `test_critique_panel.py`        | Each agent outputs valid JSON warnings list; 3 independent critiques produced.      |
+| `test_critique_aggregator.py`   | Warnings are correctly aggregated; mandatory revision routing works.                |
 | `test_latex_compiler.py`        | PDF is generated successfully from LaTeX; output file exists and is non-empty.      |
 
 ### 7.2 Integration Tests
@@ -432,8 +437,8 @@ mini-research-claw/
 - **End-to-end pipeline test:** Run the full graph on a known-good topic and assert that `final_pdf_path` points to a valid PDF.
 - **Code retry loop test:** Feed a deliberately broken `python_code`, assert that `code_retry_count` increments and the ML Coder is re-invoked.
 - **Anti-hallucination test:** Provide a hypothesis with entities not in the KG and assert that it is rejected and regenerated.
-- **Peer review loop test:** Submit a draft with deliberate issues, assert that the Review Panel returns FAIL votes and the Writer revises.
-- **Revision cap test:** Assert that after 2 failed revision rounds, the pipeline compiles the best-effort draft instead of looping infinitely.
+- **Critique loop test:** Submit a draft with deliberate issues, assert that the Critique Panel returns structured warnings and the Writer performs one mandatory revision.
+- **Confidence score test:** Assert that the revised draft includes a confidence score (1–10) and the NeurIPS reproducibility checklist.
 
 ### 7.3 Agent Evals (LLM-Specific)
 
@@ -450,9 +455,10 @@ These evals measure agent quality beyond pass/fail:
 | **Coder: Execution Success**      | Run the generated code in sandbox across 5 different hypotheses.                                           | ≥ 4/5 execute without error on first try |
 | **Writer: LaTeX Validity**         | Compile LaTeX draft with `pdflatex` and verify PDF is generated without errors.                            | Successful compilation on 10/10 runs   |
 | **Writer: Structure**             | Regex-check that LaTeX output contains `\section{Introduction}`, `\section{Methods}`, `\section{Results}`, `\section{Conclusion}`. | All 4 sections present    |
-| **Review Panel: Consistency**     | Run 3 reviewers on the same draft 5 times; verify votes are deterministic and reasoning is substantive.    | ≥ 80% vote consistency across runs     |
-| **Review Panel: Fact-Check**      | Submit a draft with hallucinated citations; verify the Fact-Checker flags them.                             | 100% hallucinated citations detected   |
-| **Review Panel: Revision Quality**| Compare pre-revision and post-revision drafts; use Claude to score improvement (1–5 scale).                | Average improvement ≥ 3.0/5           |
+| **Critique Panel: Consistency**    | Run 3 critique agents on the same draft 5 times; verify warnings are deterministic and substantive.        | ≥ 80% warning consistency across runs  |
+| **Critique Panel: Fact-Check**     | Submit a draft with hallucinated citations; verify the Fact-Checker flags them as warnings.                 | 100% hallucinated citations detected   |
+| **Critique Panel: Revision Quality**| Compare pre-revision and post-revision drafts; use Claude to score improvement (1–5 scale).               | Average improvement ≥ 3.0/5           |
+| **Coder: ML Rigor**               | Verify generated code contains train/test split, random seeds, and cross-validation.                       | All 3 practices present on 10/10 runs  |
 
 ### 7.4 Test Framework
 
@@ -546,8 +552,8 @@ File: `.github/workflows/ci.yml`
 - Run the full pipeline from the CLI with a live topic.
 - Show the terminal output as each node activates in sequence (ArXiv → Deep KG → Hypothesis → Coder → Executor → Writer → Peer Review → PDF).
 - Show the deep Knowledge Graph triplets (with technical details) and how the hypothesis is grounded in them.
-- Show the Peer Review Panel votes and reasoning from each reviewer (Fact-Checker, Methodologist, Formatter).
-- Demonstrate a revision round: show how the Writer revises the draft based on peer feedback.
+- Show the Critique Panel warnings from each agent (Fact-Checker, Methodologist, Formatter).
+- Demonstrate the mandatory revision pass: show how the Writer addresses warnings and appends the Confidence Score.
 - Open the generated NeurIPS PDF and walk through each section.
 - Trigger a forced failure to demonstrate the self-healing retry loop.
 
@@ -605,7 +611,7 @@ The final `ai-usage-report.md` will include, for each area:
 | ---- | ------- | ------ |
 | 9 Nodes (7 AI-powered + 2 non-AI) in 5 Phases | §2 | Planned |
 | Deep KG with Full-Text Parsing (Anti-Hallucination) | §2 (Phase 1) | Planned |
-| 3-Agent Peer Review Panel (Automated Evals) | §2 (Phase 4) | Planned |
+| 3-Agent Critique & Linting Engine | §2 (Phase 4) | Planned |
 | User Stories (15) + Product Backlog (4 sprints) | §3 | Planned |
 | Diagrams (5 total) | §4 | Planned |
 | Git Strategy (branches, PRs, conventional commits) | §6 | Planned |
