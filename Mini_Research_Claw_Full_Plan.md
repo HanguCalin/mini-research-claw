@@ -542,7 +542,7 @@ All diagrams are stored in the repository under the `docs/diagrams/` directory.
 
 ### 4.1 Component Architecture Diagram
 
-High-level system components: CLI Interface, LangGraph Orchestrator, Iterative ArXiv Retriever, Epistemic KG Extractor (with SBERT clustering + LLM dedup + polarity), Incremental Hypothesis Generator (with Novelty Scorer + Prior-Art Screening), HITL Gate 1 (Hypothesis), Experimental Designer, HITL Gate 2 (Experiment), Constrained ML Coder (with debug injection + ExperimentSpec binding), Dependency Resolver (AST parser + host-side cache), Executor Sandbox (Docker `--network=none` with `:ro` volume mounts), Claim Ledger Builder (with No-Paper gate), Academic Writer (claim ledger-grounded), Deterministic Linter, Heterogeneous Review Panel (3 diverse agents + debate protocol + claim ledger), Critique Aggregator, LaTeX Compiler (with Repair Loop), arXiv API, SBERT Embedding Service, File System Output.
+High-level system components: CLI Interface, LangGraph Orchestrator (with **scoped state views** via `build_scoped_view()`), Iterative ArXiv Retriever, Epistemic KG Extractor (with SBERT clustering + LLM dedup + polarity + `context_condition`), Incremental Hypothesis Generator (with Novelty Scorer + Prior-Art Screening), HITL Gate 1 (Hypothesis), Experimental Designer, HITL Gate 2 (Experiment), Constrained ML Coder (with debug injection + ExperimentSpec binding + **static-import-only enforcement**), Dependency Resolver (AST parser + host-side cache), Executor Sandbox (Docker `--network=none` with `:ro` volume mounts), Claim Ledger Builder (with No-Paper gate + `context_condition`-aware evidence rating), Academic Writer (claim ledger-grounded), Deterministic Linter, Heterogeneous Review Panel (3 diverse agents + debate protocol + claim ledger), Critique Aggregator, LaTeX Compiler (with Repair Loop), arXiv API, SBERT Embedding Service, File System Output.
 
 ### 4.2 LangGraph Workflow Diagram (State Machine)
 
@@ -554,6 +554,7 @@ START → [Node 1: Iterative ArXiv Retriever] → [Node 2: Epistemic KG Extracto
                                               + SBERT entity clustering
                                               + LLM dedup pass
                                               + polarity (supports/contradicts)
+                                              + context_condition (boundary conds)
                                                         │
                                                         ▼
                                     [Node 3: Incremental Hypothesis Generator]
@@ -598,6 +599,8 @@ Phase 2: Experimentation
                   │
           [Node 4: Constrained ML Coder] ←── (bound to ExperimentSpec)
                   │                          + debug injection
+                  │                          + static imports only
+                  │                    (scoped view: experiment_spec + hypothesis)
           [Node 4b: Dependency Resolver]
                   │
             AST parse → pre-fetch deps
@@ -630,6 +633,8 @@ Phase 3: Paper Drafting
   │
   [Node 6: Academic Writer]
     (claim ledger-grounded)
+    (scoped view: claim_ledger + metrics_json
+     + experiment_spec + incremental_delta)
         │
 Phase 4: Critique
         │
@@ -683,7 +688,7 @@ Phase 5: Publication      │
 
 ### 4.3 UML Sequence Diagram
 
-Illustrates the message flow between User → CLI → LangGraph → each Node (Iterative ArXiv Retriever, Epistemic KG Extractor + SBERT dedup + polarity, Incremental Hypothesis Generator + novelty scorer + prior-art screening, HITL Gate 1 ↔ Human Operator, Experimental Designer, HITL Gate 2 ↔ Human Operator, Constrained ML Coder + debug injection, Dependency Resolver + host-side fetch, Executor + Docker with `:ro` mounts, Claim Ledger Builder + No-Paper gate, Academic Writer, Deterministic Linter, Heterogeneous Review Panel + debate rounds, Critique Aggregator, LaTeX Compiler + Repair Loop) → external services (arXiv, SBERT, Docker, pdflatex) → PDF output (or No-Paper outcome).
+Illustrates the message flow between User → CLI → LangGraph (with scoped state views per node) → each Node (Iterative ArXiv Retriever, Epistemic KG Extractor + SBERT dedup + polarity + `context_condition`, Incremental Hypothesis Generator + novelty scorer + prior-art screening, HITL Gate 1 ↔ Human Operator, Experimental Designer, HITL Gate 2 ↔ Human Operator, Constrained ML Coder (static imports only) + debug injection, Dependency Resolver + host-side fetch, Executor + Docker with `:ro` mounts, Claim Ledger Builder + No-Paper gate, Academic Writer, Deterministic Linter, Heterogeneous Review Panel + debate rounds, Critique Aggregator, LaTeX Compiler + Repair Loop) → external services (arXiv, SBERT, Docker, pdflatex) → PDF output (or No-Paper outcome).
 
 ### 4.4 Global State Data Model (Class Diagram)
 
@@ -770,9 +775,10 @@ Shows: Host machine, Docker daemon (with `--network=none` sandbox + `:ro` volume
 
 1. Initialize a clean Python project with `pyproject.toml` or `requirements.txt`.
 2. Install core dependencies: `anthropic`, `langgraph`, `arxiv`, `docker`, `datasets`, `huggingface_hub`, `sentence-transformers`, `scikit-learn`, `numpy`, `rich`.
-3. Create a `Dockerfile.sandbox` with a base Python image and data science libraries (pandas, scikit-learn, numpy, datasets, huggingface_hub, transformers).
+3. Create a `Dockerfile.sandbox` with a base Python image and **pre-compiled wheels only** for data science libraries (pandas, scikit-learn, numpy, datasets, huggingface_hub, transformers) — no system C compilers installed in the sandbox image.
 4. Install LaTeX toolchain (`texlive`, `pdflatex`, `bibtex`) in the build environment.
 5. Store `ANTHROPIC_API_KEY` securely in a `.env` file (excluded from git via `.gitignore`).
+6. Implement the **scoped state view infrastructure**: create `backend/utils/state_pruning.py` containing the `build_scoped_view(state, node_name)` utility and the `NODE_SCOPE_CONFIG` dictionary that maps each AI node to its allowed state fields (see §2 Context Management).
 
 ### Phase 2: Define the Global State
 
@@ -921,16 +927,16 @@ class AutoResearchState(TypedDict):
 
 Implement each of the 14 nodes as described in Section 2 above, each in its own Python module under `backend/agents/`:
 
-- `arxiv_retriever.py` — Iterative full-text ArXiv paper download and section extraction (non-AI)
-- `kg_extractor.py` — Epistemic KG extraction with polarity + SBERT entity clustering + LLM dedup (AI)
-- `hypothesis_generator.py` — Incremental hypothesis generation with KG grounding + SBERT novelty scoring + prior-art screening (AI)
+- `arxiv_retriever.py` — Iterative full-text ArXiv paper download and section extraction; TF-IDF keyword refinement for rounds 2+ (non-AI)
+- `kg_extractor.py` — Epistemic KG extraction with polarity + `context_condition` for conditional claims + SBERT entity clustering + LLM dedup (AI)
+- `hypothesis_generator.py` — Incremental hypothesis generation with KG grounding (exploiting contested pairs + conditional edges) + SBERT novelty scoring + prior-art screening (AI)
 - `hitl_gate.py` — Human-in-the-loop hypothesis approval checkpoint (non-AI)
 - `experiment_designer.py` — Structured ExperimentSpec generation from approved hypothesis (AI)
 - `hitl_experiment_gate.py` — Human-in-the-loop experiment approval checkpoint (non-AI)
-- `ml_coder.py` — Constrained experiment code generation bound to ExperimentSpec + active debug injection (AI)
+- `ml_coder.py` — Constrained experiment code generation bound to ExperimentSpec + active debug injection + **static-import-only enforcement** (no `importlib`/`exec()`/`eval()`, pre-compiled wheels only) (AI)
 - `dependency_resolver.py` — AST parsing + host-side dependency/dataset pre-fetch (non-AI)
 - `executor.py` — Docker sandbox runner with `:ro` cache volume mounts (non-AI)
-- `claim_ledger_builder.py` — Claim traceability construction + No-Paper gate (non-AI)
+- `claim_ledger_builder.py` — Claim traceability construction (respects `context_condition` for evidence strength) + No-Paper gate (non-AI)
 - `academic_writer.py` — Claim ledger-grounded LaTeX/BibTeX draft generation + revision pass (AI)
 - `deterministic_linter.py` — Rule-based pre-check (IMRaD, citations, claim compliance) (non-AI)
 - `critique_panel.py` — 3-agent heterogeneous critique with structured debate protocol + claim ledger (AI)
@@ -939,40 +945,42 @@ Implement each of the 14 nodes as described in Section 2 above, each in its own 
 
 Shared utilities under `backend/utils/`:
 - `embeddings.py` — SBERT embedding + novelty (RND) + prior-art similarity computation
-- `kg_utils.py` — KG entity clustering + deduplication + polarity logic
-- `ast_parser.py` — AST-based dependency/dataset extraction from generated code
+- `kg_utils.py` — KG entity clustering + deduplication + polarity + `context_condition` logic
+- `ast_parser.py` — AST-based dependency/dataset extraction from generated code (relies on static imports — validated by ML Coder constraints)
 - `latex_utils.py` — pdflatex log parsing (line number + error + context extraction)
-- `claim_utils.py` — Claim ledger construction + evidence strength rating
+- `claim_utils.py` — Claim ledger construction + evidence strength rating (accounts for `context_condition` when scoring)
 - `docker_utils.py` — Docker container lifecycle management with `:ro` volume mounts
+- `state_pruning.py` — `build_scoped_view(state, node_name)` utility + `NODE_SCOPE_CONFIG` dictionary for per-node state field allowlists
 
 ### Phase 4: Orchestration with LangGraph
 
 1. Register the 14 nodes as graph nodes.
-2. Define Phase 1 edges: START → Iterative ArXiv Retriever → Epistemic KG Extractor (with post-processing dedup + polarity) → Incremental Hypothesis Generator (with novelty scoring + prior-art screening).
-3. Define conditional edges at Hypothesis Generator:
+2. **Wire scoped state views:** Before each AI-powered node invocation, the orchestrator calls `build_scoped_view(state, node_name)` to construct a pruned state containing only the fields that node needs (see §2 Context Management). Non-AI nodes receive the full state since they don't incur LLM token costs.
+3. Define Phase 1 edges: START → Iterative ArXiv Retriever → Epistemic KG Extractor (with post-processing dedup + polarity + `context_condition`) → Incremental Hypothesis Generator (with novelty scoring + prior-art screening).
+4. Define conditional edges at Hypothesis Generator:
    - KG validation passes AND novelty passes AND prior-art screening passes → HITL Gate 1.
    - KG validation fails (hallucination) → regenerate hypothesis.
    - Novelty score below threshold OR prior-art similarity above ceiling → END (failed_novelty report).
    - Iterative retrieval trigger → back to Iterative ArXiv Retriever (up to `max_retrieval_rounds`).
-4. Define conditional edge at HITL Gate 1:
+5. Define conditional edge at HITL Gate 1:
    - Human approves hypothesis → Experimental Designer.
    - Human rejects → END (failed_hitl_rejected report).
-5. Define edges: Experimental Designer → HITL Gate 2.
-6. Define conditional edge at HITL Gate 2:
+6. Define edges: Experimental Designer → HITL Gate 2.
+7. Define conditional edge at HITL Gate 2:
    - Human approves experiment → Constrained ML Coder.
    - Human rejects → back to Experimental Designer (redesign) or END (if operator aborts).
-7. Define Phase 2 edges: Constrained ML Coder → Dependency Resolver → Executor.
-8. Define conditional edges at Executor:
+8. Define Phase 2 edges: Constrained ML Coder (scoped: `experiment_spec` + `hypothesis` only) → Dependency Resolver → Executor.
+9. Define conditional edges at Executor:
    - Success → Claim Ledger Builder.
-   - Failure (code_retry_count < 3) → ML Coder (self-healing loop with debug logs).
+   - Failure (code_retry_count < 3) → ML Coder (scoped: adds `python_code` + `execution_logs` for retry context).
    - Failure (code_retry_count ≥ 3) → END (failure report).
-9. Define conditional edge at Claim Ledger Builder:
-   - Evidence sufficient (≤ 50% weak/unsupported claims) → Academic Writer.
-   - Evidence insufficient (> 50% weak/unsupported) → END (no_paper report).
-10. Define Phase 3 edge: Academic Writer → Deterministic Linter → Critique Panel.
-11. Define Phase 4 edges: Critique Panel (with debate) → Critique Aggregator (linter + debate warnings) → Academic Writer (one mandatory revision pass).
-12. Define Phase 5 edges: Academic Writer (revised) → LaTeX Compiler (with repair loop) → END.
-13. Compile and expose the graph via a `run_pipeline(topic: str)` function.
+10. Define conditional edge at Claim Ledger Builder:
+    - Evidence sufficient (≤ 50% weak/unsupported claims) → Academic Writer.
+    - Evidence insufficient (> 50% weak/unsupported) → END (no_paper report).
+11. Define Phase 3 edge: Academic Writer (scoped: `claim_ledger` + `experiment_spec` + `metrics_json` + `incremental_delta` + `hypothesis`) → Deterministic Linter → Critique Panel (scoped: `latex_draft` + `bibtex_source` + `metrics_json` + `claim_ledger`).
+12. Define Phase 4 edges: Critique Panel (with debate) → Critique Aggregator (linter + debate warnings) → Academic Writer (one mandatory revision pass).
+13. Define Phase 5 edges: Academic Writer (revised) → LaTeX Compiler (with repair loop) → END.
+14. Compile and expose the graph via a `run_pipeline(topic: str)` function.
 
 ### Phase 5: Testing & Iteration
 
@@ -984,6 +992,9 @@ Shared utilities under `backend/utils/`:
 6. **No-Paper Outcome:** Run a topic with sparse/contradictory literature and verify the claim ledger builder triggers the No-Paper gate.
 7. **LaTeX Repair:** Inject a deliberate LaTeX error (unclosed environment) and verify the repair loop fixes it.
 8. **Debate Protocol:** Submit a draft with a hallucinated claim and verify the Fact-Checker flags it via claim ledger and the claim survives/fails the debate.
+9. **AST Fragility:** Inject code using `importlib.import_module()` and verify the ML Coder's prompt constraints prevent it; if it slips through, verify the Dependency Resolver flags the unresolvable dynamic import.
+10. **State Pruning:** Verify that the ML Coder's scoped view contains only `experiment_spec` + `hypothesis` (not raw papers or KG); verify the Academic Writer's scoped view excludes `execution_logs` and `arxiv_papers_full_text`.
+11. **Conditional Claims (`context_condition`):** Provide papers with conditional findings (e.g., "method A outperforms B only on small datasets") and verify the KG edges carry the boundary condition; verify the Hypothesis Generator does not overgeneralize the conditional claim into an unconditional hypothesis.
 
 ---
 
@@ -1039,7 +1050,8 @@ mini-research-claw/
 │       ├── ast_parser.py            # AST-based dependency/dataset extraction
 │       ├── latex_utils.py           # pdflatex log parsing
 │       ├── claim_utils.py           # Claim ledger construction + evidence strength
-│       └── docker_utils.py          # Docker container lifecycle + :ro mounts
+│       ├── docker_utils.py          # Docker container lifecycle + :ro mounts
+│       └── state_pruning.py         # build_scoped_view() + NODE_SCOPE_CONFIG
 │
 ├── tests/
 │   ├── test_arxiv_retriever.py
@@ -1057,6 +1069,7 @@ mini-research-claw/
 │   ├── test_critique_panel.py
 │   ├── test_critique_aggregator.py
 │   ├── test_latex_compiler.py
+│   ├── test_state_pruning.py
 │   └── evals/
 │       ├── eval_kg_extractor.py
 │       ├── eval_hypothesis.py
@@ -1114,19 +1127,20 @@ mini-research-claw/
 | Test File                        | What It Tests                                                                          |
 | -------------------------------- | -------------------------------------------------------------------------------------- |
 | `test_arxiv_retriever.py`        | arXiv search returns full-text results; iterative retrieval refines queries correctly.  |
-| `test_kg_extractor.py`           | KG output uses schema-based typed entities with polarity; SBERT dedup merges synonyms; contradictions preserved. |
+| `test_kg_extractor.py`           | KG output uses schema-based typed entities with polarity + `context_condition`; SBERT dedup merges synonyms; contradictions preserved; conditional claims carry boundary conditions. |
 | `test_hypothesis_generator.py`   | Hypothesis is non-empty; grounded in KG; incremental_delta is present; novelty score + prior-art similarity computed and gated. |
 | `test_hitl_gate.py`              | Pipeline pauses correctly at HITL Gate 1; approve/reject flows work; state fields updated properly. |
 | `test_experiment_designer.py`    | ExperimentSpec is well-formed with all required fields; dataset IDs are real and verifiable. |
 | `test_hitl_experiment_gate.py`   | Pipeline pauses correctly at HITL Gate 2; approve routes to ML Coder; reject routes back to designer. |
-| `test_ml_coder.py`               | Generated code is syntactically valid; implements approved ExperimentSpec; contains debug print instrumentation. |
+| `test_ml_coder.py`               | Generated code is syntactically valid; implements approved ExperimentSpec; contains debug print instrumentation; uses only static imports (no `importlib`/`exec()`/`eval()`); uses only pre-compiled-wheel packages. |
 | `test_dependency_resolver.py`    | AST parser correctly identifies imports and `load_dataset()` calls; cache paths set.    |
 | `test_executor.py`               | Docker container starts with `--network=none` + `:ro` mounts; exit codes captured.     |
-| `test_claim_ledger_builder.py`   | Claim ledger maps assertions to KG edges; evidence strength is correctly rated; No-Paper gate triggers on insufficient evidence. |
+| `test_claim_ledger_builder.py`   | Claim ledger maps assertions to KG edges; evidence strength is correctly rated (accounts for `context_condition`); No-Paper gate triggers on insufficient evidence. |
 | `test_academic_writer.py`        | LaTeX draft is valid; contains IMRaD sections; BibTeX file is well-formed; only strong/moderate claims included. |
 | `test_deterministic_linter.py`   | Linter catches missing sections, orphaned citations, claim-ledger violations, and raw arXiv IDs. |
 | `test_critique_panel.py`         | 3 agents use different models/personas; debate protocol produces challenges/responses; claim ledger is queried. |
 | `test_critique_aggregator.py`    | Linter warnings + debate-surviving (unretracted) critiques are forwarded to the Writer. |
+| `test_state_pruning.py`          | `build_scoped_view()` returns only allowed fields per node; full state is never mutated; `NODE_SCOPE_CONFIG` covers all AI nodes. |
 | `test_latex_compiler.py`         | PDF generated on success; repair loop triggered on failure; max attempts respected.     |
 
 ### 7.2 Integration Tests
@@ -1143,6 +1157,9 @@ mini-research-claw/
 - **Debate protocol test:** Submit a draft with a hallucinated citation and assert the Fact-Checker flags it via claim ledger + KG, the debate challenges it, and it survives into `surviving_critiques`.
 - **LaTeX repair test:** Submit a `.tex` with a deliberate unclosed `\begin{table}` and assert the repair loop fixes it within 5 attempts.
 - **Confidence score test:** Assert that the revised draft includes a confidence score (1–10) and the NeurIPS reproducibility checklist.
+- **AST fragility test:** Inject code using `importlib.import_module()` or `exec("import X")` and assert the pipeline rejects it or the Dependency Resolver flags unresolvable dynamic imports.
+- **State pruning test:** Run a full pipeline and assert that the ML Coder's LLM prompt does not contain `arxiv_papers_full_text` or `kg_entities`; assert the Academic Writer's prompt does not contain `execution_logs`.
+- **Conditional claims test (`context_condition`):** Provide papers with conditional findings and assert KG edges carry boundary conditions; assert the claim ledger rates conditional evidence supporting an unconditional claim as weaker than unconditional evidence.
 
 ### 7.3 Agent Evals (LLM-Specific)
 
@@ -1166,6 +1183,10 @@ These evals measure agent quality beyond pass/fail:
 | **Claim Ledger: Accuracy**           | Inject KG with known support/contradiction patterns; verify evidence strength ratings are correct.        | ≥ 90% ratings correct                  |
 | **Claim Ledger: No-Paper Gate**      | Inject mostly unsupported claims; verify No-Paper outcome triggers.                                       | 100% correct gate decisions            |
 | **Linter: Detection Rate**           | Inject 10 common structural issues (missing sections, orphaned cites, raw arXiv IDs); verify detection.   | ≥ 9/10 issues detected                |
+| **KG Extractor: Context Conditions** | Inject papers with conditional claims (e.g., "only on small datasets"); verify `context_condition` is populated. | ≥ 85% conditional claims captured      |
+| **Coder: Static Import Compliance**  | Verify generated code contains no `importlib`, `exec()`, `eval()`, `__import__()`, or `subprocess` usage. | 0 violations on 10/10 runs             |
+| **Coder: Pre-Compiled Wheels Only**  | Verify all imports map to packages in the pre-compiled allowlist (no C-compiler-dependent packages).      | 100% allowlist compliance on 10/10     |
+| **State Pruning: Field Isolation**   | Verify each AI node's scoped view contains only its allowed fields per `NODE_SCOPE_CONFIG`.               | 100% correct scoping on all nodes      |
 | **Dependency Resolver: Accuracy**    | Test AST parser against 10 sample scripts; verify all imports and `load_dataset` calls are captured.      | 100% recall on known dependencies      |
 | **Writer: LaTeX Validity**           | Compile LaTeX draft with `pdflatex` and verify PDF is generated without errors.                           | Successful compilation on 10/10 runs   |
 | **Writer: Structure**                | Regex-check that LaTeX output contains `\section{Introduction}`, `\section{Methods}`, `\section{Results}`, `\section{Conclusion}`. | All 4 sections present |
@@ -1266,14 +1287,15 @@ File: `.github/workflows/ci.yml`
 
 - Run the full pipeline from the CLI with a live topic.
 - Show the terminal output as each node activates in sequence.
-- Show the **epistemic Knowledge Graph** (with SBERT-clustered entities and polarity) — highlight a contested edge pair (supports vs. contradicts).
-- Show the **incremental delta** and how the hypothesis exploits contradictions in the KG.
+- Show the **epistemic Knowledge Graph** (with SBERT-clustered entities, polarity, and `context_condition`) — highlight a contested edge pair (supports vs. contradicts) and a conditional edge with its boundary condition.
+- Show the **incremental delta** and how the hypothesis exploits contradictions and conditional findings in the KG.
 - Show the **novelty score** and **prior-art similarity score** computations and how they compare to thresholds.
 - Demonstrate **HITL Gate 1**: show the Rich-formatted approval prompt with hypothesis, incremental delta, KG triples (with polarity), and novelty scores.
 - Show the **Experimental Designer** output: the structured ExperimentSpec with IV, DV, control, dataset, metrics.
 - Demonstrate **HITL Gate 2**: show the experiment approval prompt and approve the design.
-- Show the **Dependency Resolver** output: AST-parsed imports and datasets, host-side cache, `:ro` volume mounts.
-- Show the **claim ledger**: how each paper claim maps to supporting/contradicting KG evidence with strength ratings.
+- Show the **Dependency Resolver** output: AST-parsed static imports and datasets, host-side cache, `:ro` volume mounts. Highlight that only pre-compiled-wheel packages are resolved (no C-compiler dependencies).
+- Show the **scoped state views**: demonstrate that the ML Coder receives only `experiment_spec` + `hypothesis` (not the full 50K+ token state), and the Academic Writer receives only the claim ledger + metrics (not raw papers or execution logs).
+- Show the **claim ledger**: how each paper claim maps to supporting/contradicting KG evidence with strength ratings, including how `context_condition` affects evidence strength (conditional evidence for unconditional claims is rated weaker).
 - Show the **deterministic linter** output: structural checks run before the LLM critique panel.
 - Show the **heterogeneous Critique Panel** warnings from each agent (Fact-Checker via KG + claim ledger query, Methodologist with ExperimentSpec check, Formatter).
 - Demonstrate the **structured debate protocol**: show challenges, responses, and which critiques survive.
@@ -1302,7 +1324,7 @@ This section documents how AI tools were used throughout every phase of developm
 | ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | User Stories & Backlog       | Claude / ChatGPT                       | Generated initial user stories from the project description; refined acceptance criteria.          |
 | Architecture & Diagrams      | Claude (Mermaid), ChatGPT (PlantUML)   | Generated UML sequence diagrams, component diagrams, and state machine diagrams from descriptions. |
-| Design Review & Overhauls    | Claude                                 | Analyzed architectural evaluation PDF; implemented 6 critical overhauls to address systemic bottlenecks. |
+| Design Review & Overhauls    | Claude                                 | Analyzed architectural evaluation PDF and epistemic peer review; implemented 9 critical overhauls (KG polarity, iterative retrieval, prior-art screening, double HITL, claim ledger, No-Paper outcome, deterministic linter, context conditions, state pruning) plus 3 operational safeguards (AST fragility fix, scoped state views, conditional claims). |
 | Code Implementation          | GitHub Copilot, Claude                 | Auto-completed boilerplate, generated agent prompt templates, wrote Docker configuration.          |
 | Test Writing                 | Claude / Copilot                       | Generated pytest test cases and mock fixtures from function signatures.                           |
 | Agent Eval Design            | Claude                                 | Designed evaluation rubrics and LLM-as-judge prompts for coherence and relevance scoring.         |
@@ -1336,16 +1358,17 @@ The final `ai-usage-report.md` will include, for each area:
 | Area | Section | Status |
 | ---- | ------- | ------ |
 | 14 Nodes (8 AI-powered + 6 non-AI) in 5 Phases + 2 HITL | §2 | Planned |
+| Context Management — Scoped State Views per AI Node | §2 (Context Management) | Planned |
 | Iterative ArXiv Retrieval (hypothesis-driven refinement, up to 3 rounds) | §2 (Node 1) | Planned |
-| Epistemic KG Extraction + Polarity + SBERT Dedup (Contradiction Preservation) | §2 (Node 2) | Planned |
+| Epistemic KG Extraction + Polarity + `context_condition` + SBERT Dedup | §2 (Node 2) | Planned |
 | Incremental Hypothesis + Novelty Detection + Prior-Art Screening | §2 (Node 3) | Planned |
 | HITL Gate 1: Hypothesis Approval | §2 (Node 3b) | Planned |
 | Experimental Designer (Structured ExperimentSpec) | §2 (Node 3c) | Planned |
 | HITL Gate 2: Experiment Approval | §2 (Node 3d) | Planned |
-| Constrained ML Coder (ExperimentSpec-bound) + Active Debugging | §2 (Node 4) | Planned |
+| Constrained ML Coder (ExperimentSpec-bound + static imports + pre-compiled wheels) | §2 (Node 4) | Planned |
 | AST-Based Dependency Resolver (Network-Isolation Fix) | §2 (Node 4b) | Planned |
 | Docker Sandbox with `:ro` Cache Volume Mounts | §2 (Node 5) | Planned |
-| Claim Ledger Builder + No-Paper Outcome Gate | §2 (Node 5b) | Planned |
+| Claim Ledger Builder + No-Paper Outcome Gate (`context_condition`-aware) | §2 (Node 5b) | Planned |
 | Claim Ledger-Grounded Academic Writer | §2 (Node 6) | Planned |
 | Deterministic Linter (IMRaD, citations, claim compliance) | §2 (Node 6b) | Planned |
 | Heterogeneous Review Panel + Structured Debate + Claim Ledger | §2 (Node 7) | Planned |
@@ -1354,7 +1377,7 @@ The final `ai-usage-report.md` will include, for each area:
 | User Stories (31) + Product Backlog (5 sprints) | §3 | Planned |
 | Diagrams (5 total) | §4 | Planned |
 | Git Strategy (branches, PRs, conventional commits) | §6 | Planned |
-| Automated Tests (15 unit + 12 integration) + Agent Evals (24 evals) | §7 | Planned |
+| Automated Tests (16 unit + 15 integration) + Agent Evals (28 evals) | §7 | Planned |
 | Bug Reporting + Resolution via PR | §8 | Planned |
 | CI/CD Pipeline (GitHub Actions) | §9 | Planned |
 | NeurIPS PDF Generation (LaTeX + BibTeX + Repair Loop) | §2 (Phase 5) | Planned |
