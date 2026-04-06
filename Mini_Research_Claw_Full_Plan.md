@@ -70,6 +70,35 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 - **Tools:** A Python script using the `arxiv` library and arXiv's HTML endpoints or LaTeX source parsing.
 - **Responsibility:** Query arXiv based on the user's prompt (round 1) or hypothesis-derived search terms (rounds 2+). Instead of stopping at abstracts, it fetches the full text of the top 3–5 papers per round and extracts the `Methodology`, `Implementation`, and `Results` sections. Writes results to `arxiv_papers_full_text` in the state and increments `retrieval_round`.
 
+- **Supabase Cache-First Retrieval (Database Integration):**
+
+  > **Infrastructure Upgrade:** Instead of fetching every paper from arXiv on every pipeline run, Node 1 now checks a **Supabase PostgreSQL database** first. If a paper (identified by arXiv ID) has been downloaded and parsed by any previous pipeline run, its full text, metadata, and SBERT embedding are read directly from the database — eliminating redundant API calls, respecting arXiv rate limits, and making the system faster on repeated or overlapping topics.
+
+  **`papers` table schema (Supabase PostgreSQL + pgvector):**
+
+  ```sql
+  CREATE TABLE papers (
+    id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    arxiv_id      TEXT UNIQUE NOT NULL,           -- e.g. "2401.12345"
+    title         TEXT NOT NULL,
+    authors       TEXT[] NOT NULL,                -- PostgreSQL array
+    year          INT NOT NULL,
+    abstract      TEXT,
+    full_text     JSONB NOT NULL,                 -- {methodology, implementation, results}
+    embedding     vector(384) NOT NULL,           -- SBERT all-MiniLM-L6-v2 embedding
+    created_at    TIMESTAMPTZ DEFAULT now()
+  );
+
+  CREATE INDEX ON papers USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
+  ```
+
+  **Retrieval protocol per paper:**
+  1. Query `SELECT * FROM papers WHERE arxiv_id = :id` for each arXiv result.
+  2. **Cache hit** → read directly from the database; skip arXiv download entirely.
+  3. **Cache miss** → download full text from arXiv, extract sections, compute SBERT embedding, and `INSERT INTO papers` for future reuse.
+
+  This turns the Supabase database into a **shared, persistent corpus** that grows across all pipeline runs. The `pgvector` embeddings stored alongside each paper are reused by Node 3's prior-art screening (see below) — no redundant SBERT inference.
+
 - **Why Iterative?** The user's initial prompt is typically broad and informal (e.g., "sentiment analysis with transformers"). The first retrieval round discovers general papers, but the KG Extractor and Hypothesis Generator downstream will introduce specific technical concepts (e.g., "LoRA fine-tuning", "attention head pruning") that the user never mentioned. A second retrieval pass using these refined terms discovers highly relevant papers that the initial broad query could never surface. Without iteration, the pipeline operates on an incomplete literature picture, leading to hypotheses that either reinvent existing work or miss important prior art.
 
 - **Iterative Protocol:**
@@ -230,14 +259,23 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 - **Automated Novelty Detection + Prior-Art Screening Protocol** (deterministic post-step):
   1. Embed the generated hypothesis using SBERT (`all-MiniLM-L6-v2`).
-  2. Embed all paper abstracts from `arxiv_papers_full_text[]`.
-  3. Compute **Relative Neighbor Density (RND):** the average cosine distance from the hypothesis embedding to the K nearest literature embeddings.
-  4. Compute **Prior-Art Similarity Score:** the maximum cosine similarity between the hypothesis embedding and any single paper abstract embedding. This catches cases where the hypothesis is a near-paraphrase of one specific paper (even if the average RND looks acceptable).
-  5. Apply dual gating:
+  2. **Prior-Art Similarity via Supabase `pgvector`:** Instead of embedding paper abstracts in-memory (which only covers the 5–15 papers retrieved for this run), the prior-art similarity score is computed **natively in the database** against the **entire historical corpus** of all papers ever processed by the system. This is a single SQL query:
+
+     ```sql
+     SELECT arxiv_id, title, 1 - (embedding <=> :hypothesis_embedding) AS similarity
+     FROM papers
+     ORDER BY embedding <=> :hypothesis_embedding
+     LIMIT 10;
+     ```
+
+     The `<=>` operator computes cosine distance using the `pgvector` IVFFlat index — sub-millisecond on corpora of 10K+ papers. The **Prior-Art Similarity Score** is the maximum `similarity` value from the result. This is strictly superior to in-memory comparison because it screens against hundreds or thousands of previously seen papers, not just the handful retrieved for the current run.
+
+  3. Compute **Relative Neighbor Density (RND):** the average cosine distance from the hypothesis embedding to the K nearest literature embeddings (also retrieved from the `pgvector` query above).
+  4. Apply dual gating:
      - **RND ≥ `novelty_threshold`** (default: `0.35`) AND **Prior-Art Similarity < `prior_art_ceiling`** (default: `0.90`) → hypothesis is sufficiently novel → proceed to HITL Gate.
-     - **RND < threshold** OR **Prior-Art Similarity ≥ ceiling** → hypothesis is too similar to existing work → pipeline terminates with `failed_novelty` status and a report explaining which papers are too close, including the `incremental_delta` for the operator to review.
-  6. Write `novelty_score`, `prior_art_similarity_score`, `hypothesis_embedding`, `incremental_delta`, and `novelty_passed` to state.
-  7. **Iterative retrieval trigger:** If novelty passes, extract key technical terms from the hypothesis and feed them back to Node 1 for a refined retrieval round (up to `max_retrieval_rounds`).
+     - **RND < threshold** OR **Prior-Art Similarity ≥ ceiling** → hypothesis is too similar to existing work → pipeline terminates with `failed_novelty` status and a report explaining which papers are too close (with titles and arXiv IDs from the database query), including the `incremental_delta` for the operator to review.
+  5. Write `novelty_score`, `prior_art_similarity_score`, `hypothesis_embedding`, `incremental_delta`, and `novelty_passed` to state.
+  6. **Iterative retrieval trigger:** If novelty passes, extract key technical terms from the hypothesis and feed them back to Node 1 for a refined retrieval round (up to `max_retrieval_rounds`).
 
 ### HITL Checkpoint 1: Hypothesis Approval Gate
 
@@ -475,11 +513,72 @@ This ensures superficial consensus is broken. The debate log is preserved in `de
 
 - **Loop:** compile → parse log → repair → compile → ... until success or `max_latex_repair_attempts` (default: 5) is exhausted. If exhausted, pipeline terminates with `failed_latex` status and preserves the `.tex` source for manual inspection.
 
+#### Artifact Upload to Supabase Storage (Post-Compilation Step)
+
+> **Design Rationale:** Without persistent artifact storage, pipeline outputs (PDFs, metrics, claim ledgers) exist only on the host filesystem and are inaccessible to the React Web UI. By uploading all final artifacts to a **Supabase Storage bucket**, the frontend can render results for any historical run via authenticated download URLs — no backend file-serving layer required.
+
+After the pipeline reaches a terminal state — whether Node 9 completes successfully, compilation fails (`failed_latex`), evidence is insufficient (`no_paper` at Node 5b), or any other terminal outcome (`failed_novelty`, `failed_hitl`, `failed_execution`) — all available pipeline artifacts are uploaded to the **`artifacts`** Supabase Storage bucket, organized by run ID. Not all artifacts exist at every exit point (e.g., `no_paper` exits before drafting, so no `draft.tex` or PDF is produced); the uploader skips missing files gracefully.
+
+**Storage Layout:**
+
+```
+artifacts/                          # Supabase Storage bucket
+└── {run_id}/                       # UUID per pipeline run
+    ├── draft.tex                   # Final LaTeX source (always uploaded)
+    ├── references.bib              # BibTeX file
+    ├── metrics.json                # Experiment results from Node 5
+    ├── claim_ledger.json           # Full claim ledger from Node 5b
+    ├── debate_log.json             # Debate protocol transcript from Node 7
+    ├── final_paper.pdf             # Compiled PDF (only on success)
+    └── failure_report.json         # Failure details (only on failure/no-paper)
+```
+
+**Upload Protocol:**
+
+1. **Generate a `run_id`** (UUID) at pipeline start and record it in the `pipeline_runs` table alongside the topic, start timestamp, and initial status (`running`).
+2. **After Node 9 completes**, upload each artifact to `artifacts/{run_id}/` using the Supabase Storage Python client:
+   ```python
+   from supabase import create_client
+
+   supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+   # Upload each artifact
+   for filename in ["draft.tex", "references.bib", "metrics.json",
+                     "claim_ledger.json", "debate_log.json"]:
+       with open(f"output/{filename}", "rb") as f:
+           supabase.storage.from_("artifacts").upload(
+               f"{run_id}/{filename}", f, {"content-type": "application/octet-stream"}
+           )
+
+   # Upload PDF only if compilation succeeded
+   if state["final_pdf_path"]:
+       with open(state["final_pdf_path"], "rb") as f:
+           supabase.storage.from_("artifacts").upload(
+               f"{run_id}/final_paper.pdf", f, {"content-type": "application/pdf"}
+           )
+   ```
+3. **Update the `pipeline_runs` row** with the final status (`completed`, `failed_latex`, `failed_novelty`, `no_paper`, etc.), end timestamp, and the artifact bucket path (`artifacts/{run_id}/`).
+4. **React frontend integration:** The Web UI queries the `pipeline_runs` table to list historical runs. For each run, it constructs Supabase Storage download URLs to fetch and render the PDF, metrics, claim ledger, and debate log — no backend file-serving endpoint needed.
+
+**`pipeline_runs` table schema (Supabase PostgreSQL):**
+
+```sql
+CREATE TABLE pipeline_runs (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  topic         TEXT NOT NULL,
+  status        TEXT NOT NULL DEFAULT 'running',
+  artifact_path TEXT,                          -- e.g., 'artifacts/{run_id}/'
+  started_at    TIMESTAMPTZ DEFAULT now(),
+  completed_at  TIMESTAMPTZ,
+  metadata      JSONB                          -- optional: novelty score, confidence, etc.
+);
+```
+
 ---
 
 ## 3. User Stories & Product Backlog
 
-### 3.1 User Stories (31 total)
+### 3.1 User Stories (34 total)
 
 | ID    | User Story | Priority | Story Points |
 | ----- | ---------- | -------- | ------------ |
@@ -514,22 +613,25 @@ This ensures superficial consensus is broken. The debate log is preserved in `de
 | US-29 | As a developer, I want the ML Coder to be **restricted to static imports and pre-compiled wheels only** (no `importlib`, `exec()`, `eval()`, or C-compiler-dependent packages) so that the AST-based Dependency Resolver can reliably detect all dependencies and the sandbox never fails on missing system compilers. | Must Have | 3 |
 | US-30 | As a developer, I want each AI-powered node to receive a **scoped view (pruned state)** containing only the fields it needs — not the entire `AutoResearchState` — so that "lost in the middle" attention degradation is avoided and API token costs are minimized. | Must Have | 5 |
 | US-31 | As a researcher, I want KG edges to include a **`context_condition`** field that captures boundary conditions (e.g., "only when dataset size < 10k samples") so that conditional scientific claims are not treated as absolute truths by downstream nodes. | Must Have | 3 |
+| US-32 | As a researcher, I want the ArXiv Retriever to **cache papers in a Supabase PostgreSQL database** (with `pgvector` embeddings) so that repeated or overlapping topics reuse previously downloaded papers instead of redundant API calls. | Must Have | 5 |
+| US-33 | As a researcher, I want prior-art similarity screening to query the **entire historical paper corpus via `pgvector` cosine distance** (not just the current run's papers) so that novelty is assessed against all previously processed literature. | Must Have | 3 |
+| US-34 | As a researcher, I want all final pipeline artifacts (PDF, metrics, claim ledger, debate log, LaTeX source) to be **uploaded to a Supabase Storage bucket** so that the React Web UI can render results for any historical run without a custom backend file server. | Must Have | 5 |
 
 ### 3.2 Product Backlog
 
 The backlog is organized into 5 sprints:
 
 **Sprint 1 — Foundation (Week 1):**
-US-01, US-07, US-20, US-30 — CLI entry point, Docker sandbox setup, logging infrastructure, scoped state view infrastructure (`build_scoped_view()` + `NODE_SCOPE_CONFIG`).
+US-01, US-07, US-20, US-30, US-32 — CLI entry point, Docker sandbox setup, logging infrastructure, scoped state view infrastructure (`build_scoped_view()` + `NODE_SCOPE_CONFIG`), Supabase project provisioning (pgvector, `papers` table, `pipeline_runs` table, `artifacts` storage bucket).
 
 **Sprint 2 — Phase 1: Epistemic Literature & KG (Week 2):**
-US-02, US-21, US-03, US-22, US-31, US-04, US-23, US-05, US-24, US-06 — Iterative ArXiv retrieval, epistemic KG extraction with polarity + `context_condition` + entity dedup, incremental hypothesis generation with novelty scoring + prior-art screening, HITL Gate 1.
+US-02, US-21, US-03, US-22, US-31, US-04, US-23, US-05, US-24, US-33, US-06 — Iterative ArXiv retrieval with Supabase cache-first lookup, epistemic KG extraction with polarity + `context_condition` + entity dedup, incremental hypothesis generation with novelty scoring + pgvector-native prior-art screening against full historical corpus, HITL Gate 1.
 
 **Sprint 3 — Experiment Design & Phase 2 Experimentation (Week 3):**
 US-25, US-26, US-29, US-08, US-09, US-10 — Experimental Designer, HITL Gate 2, ML Coder import safety constraints (static imports + pre-compiled wheels only), Dependency Resolver (AST parsing + pre-caching), active debugging injection, self-healing loop with context-aware retry.
 
 **Sprint 4 — Draft, Review & Publication (Week 4):**
-US-27, US-11, US-28, US-12, US-13, US-14, US-15, US-16 — Claim Ledger Builder (with No-Paper gate), Academic Writer (claim ledger-grounded), Deterministic Linter, heterogeneous Review Panel with debate protocol, KG + claim ledger-grounded fact-checking, mandatory revision, LaTeX compiler repair loop.
+US-27, US-11, US-28, US-12, US-13, US-14, US-15, US-16, US-34 — Claim Ledger Builder (with No-Paper gate), Academic Writer (claim ledger-grounded), Deterministic Linter, heterogeneous Review Panel with debate protocol, KG + claim ledger-grounded fact-checking, mandatory revision, LaTeX compiler repair loop, artifact upload to Supabase Storage bucket.
 
 **Sprint 5 — Polish & Config (Week 5):**
 US-17, US-18, US-19 — Progress display, failure reports, model configuration, final integration testing.
@@ -542,7 +644,7 @@ All diagrams are stored in the repository under the `docs/diagrams/` directory.
 
 ### 4.1 Component Architecture Diagram
 
-High-level system components: CLI Interface, LangGraph Orchestrator (with **scoped state views** via `build_scoped_view()`), Iterative ArXiv Retriever, Epistemic KG Extractor (with SBERT clustering + LLM dedup + polarity + `context_condition`), Incremental Hypothesis Generator (with Novelty Scorer + Prior-Art Screening), HITL Gate 1 (Hypothesis), Experimental Designer, HITL Gate 2 (Experiment), Constrained ML Coder (with debug injection + ExperimentSpec binding + **static-import-only enforcement**), Dependency Resolver (AST parser + host-side cache), Executor Sandbox (Docker `--network=none` with `:ro` volume mounts), Claim Ledger Builder (with No-Paper gate + `context_condition`-aware evidence rating), Academic Writer (claim ledger-grounded), Deterministic Linter, Heterogeneous Review Panel (3 diverse agents + debate protocol + claim ledger), Critique Aggregator, LaTeX Compiler (with Repair Loop), arXiv API, SBERT Embedding Service, File System Output.
+High-level system components: CLI Interface, LangGraph Orchestrator (with **scoped state views** via `build_scoped_view()`), Iterative ArXiv Retriever (with Supabase cache-first lookup), Epistemic KG Extractor (with SBERT clustering + LLM dedup + polarity + `context_condition`), Incremental Hypothesis Generator (with Novelty Scorer + pgvector Prior-Art Screening), HITL Gate 1 (Hypothesis), Experimental Designer, HITL Gate 2 (Experiment), Constrained ML Coder (with debug injection + ExperimentSpec binding + **static-import-only enforcement**), Dependency Resolver (AST parser + host-side cache), Executor Sandbox (Docker `--network=none` with `:ro` volume mounts), Claim Ledger Builder (with No-Paper gate + `context_condition`-aware evidence rating), Academic Writer (claim ledger-grounded), Deterministic Linter, Heterogeneous Review Panel (3 diverse agents + debate protocol + claim ledger), Critique Aggregator, LaTeX Compiler (with Repair Loop), Artifact Uploader (Supabase Storage), arXiv API, SBERT Embedding Service, **Supabase Cloud** (PostgreSQL + pgvector + Storage), React Web UI.
 
 ### 4.2 LangGraph Workflow Diagram (State Machine)
 
@@ -684,11 +786,20 @@ Phase 5: Publication      │
                           │                 │
                           ▼                 ▼
                       final.pdf      END (failed_latex)
+                          │                 │
+                          └────────┬────────┘
+                                   │
+                          [Artifact Upload]
+                          Upload to Supabase Storage
+                          Update pipeline_runs row
+                                   │
+                                   ▼
+                                  END
 ```
 
 ### 4.3 UML Sequence Diagram
 
-Illustrates the message flow between User → CLI → LangGraph (with scoped state views per node) → each Node (Iterative ArXiv Retriever, Epistemic KG Extractor + SBERT dedup + polarity + `context_condition`, Incremental Hypothesis Generator + novelty scorer + prior-art screening, HITL Gate 1 ↔ Human Operator, Experimental Designer, HITL Gate 2 ↔ Human Operator, Constrained ML Coder (static imports only) + debug injection, Dependency Resolver + host-side fetch, Executor + Docker with `:ro` mounts, Claim Ledger Builder + No-Paper gate, Academic Writer, Deterministic Linter, Heterogeneous Review Panel + debate rounds, Critique Aggregator, LaTeX Compiler + Repair Loop) → external services (arXiv, SBERT, Docker, pdflatex) → PDF output (or No-Paper outcome).
+Illustrates the message flow between User → CLI → LangGraph (with scoped state views per node) → each Node (Iterative ArXiv Retriever with Supabase cache-first lookup, Epistemic KG Extractor + SBERT dedup + polarity + `context_condition`, Incremental Hypothesis Generator + novelty scorer + pgvector prior-art screening, HITL Gate 1 ↔ Human Operator, Experimental Designer, HITL Gate 2 ↔ Human Operator, Constrained ML Coder (static imports only) + debug injection, Dependency Resolver + host-side fetch, Executor + Docker with `:ro` mounts, Claim Ledger Builder + No-Paper gate, Academic Writer, Deterministic Linter, Heterogeneous Review Panel + debate rounds, Critique Aggregator, LaTeX Compiler + Repair Loop, Artifact Upload to Supabase Storage) → external services (arXiv, SBERT, Docker, pdflatex, Supabase PostgreSQL + Storage) → PDF output (or No-Paper outcome).
 
 ### 4.4 Global State Data Model (Class Diagram)
 
@@ -743,6 +854,10 @@ Illustrates the message flow between User → CLI → LangGraph (with scoped sta
 │ + latex_repair_attempts: int                                 │
 │ + final_pdf_path: Optional[str]      # None if No-Paper      │
 ├──────────────────────────────────────────────────────────────┤
+│  Supabase Integration                                        │
+│ + run_id: str                        # UUID per pipeline run  │
+│ + artifact_urls: Dict[str, str]      # filename → Storage URL │
+├──────────────────────────────────────────────────────────────┤
 │  Telemetry                                                   │
 │ + pipeline_status: str               # running |             │
 │                                      # awaiting_hitl_hyp |   │
@@ -763,7 +878,7 @@ Illustrates the message flow between User → CLI → LangGraph (with scoped sta
 
 ### 4.5 Deployment / Infrastructure Diagram
 
-Shows: Host machine, Docker daemon (with `--network=none` sandbox + `:ro` volume mounts for `.cache/pip`, `.cache/hf`, `.cache/sklearn`), Python virtual environment, SBERT embedding model (local inference), API calls to Anthropic (multiple agents — heterogeneous models), arXiv REST API + HTML/LaTeX source endpoints, pdflatex/bibtex tools (with repair loop), Rich CLI for dual HITL interaction (hypothesis + experiment gates), file system I/O (metrics.json, claim_ledger.json, draft.tex, references.bib, debate log, final PDF or No-Paper report).
+Shows: Host machine, Docker daemon (with `--network=none` sandbox + `:ro` volume mounts for `.cache/pip`, `.cache/hf`, `.cache/sklearn`), Python virtual environment, SBERT embedding model (local inference), API calls to Anthropic (multiple agents — heterogeneous models), arXiv REST API + HTML/LaTeX source endpoints, **Supabase cloud services** (PostgreSQL with `pgvector` for paper caching + prior-art queries, Storage bucket `artifacts` for pipeline output persistence, `pipeline_runs` table for run metadata), pdflatex/bibtex tools (with repair loop), Rich CLI for dual HITL interaction (hypothesis + experiment gates), React Web UI fetching artifacts and run history from Supabase.
 
 **Deliverable:** All diagrams rendered as `.png` or `.svg` and stored in `docs/diagrams/`. Mermaid source files kept alongside for version control.
 
@@ -774,11 +889,19 @@ Shows: Host machine, Docker daemon (with `--network=none` sandbox + `:ro` volume
 ### Phase 1: Environment & Infrastructure Setup
 
 1. Initialize a clean Python project with `pyproject.toml` or `requirements.txt`.
-2. Install core dependencies: `anthropic`, `langgraph`, `arxiv`, `docker`, `datasets`, `huggingface_hub`, `sentence-transformers`, `scikit-learn`, `numpy`, `rich`.
+2. Install core dependencies: `anthropic`, `langgraph`, `arxiv`, `docker`, `datasets`, `huggingface_hub`, `sentence-transformers`, `scikit-learn`, `numpy`, `rich`, **`supabase`** (Supabase Python client for PostgreSQL + Storage integration).
 3. Create a `Dockerfile.sandbox` with a base Python image and **pre-compiled wheels only** for data science libraries (pandas, scikit-learn, numpy, datasets, huggingface_hub, transformers) — no system C compilers installed in the sandbox image.
 4. Install LaTeX toolchain (`texlive`, `pdflatex`, `bibtex`) in the build environment.
-5. Store `ANTHROPIC_API_KEY` securely in a `.env` file (excluded from git via `.gitignore`).
-6. Implement the **scoped state view infrastructure**: create `backend/utils/state_pruning.py` containing the `build_scoped_view(state, node_name)` utility and the `NODE_SCOPE_CONFIG` dictionary that maps each AI node to its allowed state fields (see §2 Context Management).
+5. Store secrets securely in a `.env` file (excluded from git via `.gitignore`):
+   - `ANTHROPIC_API_KEY` — Claude API access.
+   - **`SUPABASE_URL`** — the project's Supabase REST endpoint (e.g., `https://<project-id>.supabase.co`).
+   - **`SUPABASE_SERVICE_KEY`** — a service-role key with full access to the database and storage buckets. **Not** the anon key — the service key bypasses Row Level Security, which is required for server-side pipeline operations.
+6. **Provision the Supabase project:**
+   - Enable the **`pgvector`** extension (`CREATE EXTENSION IF NOT EXISTS vector;`) for SBERT embedding storage and cosine similarity queries.
+   - Create the **`papers`** table (see §2 Node 1 for schema) to cache arXiv papers and their embeddings.
+   - Create the **`pipeline_runs`** table to store per-run metadata (topic, status, timestamps, artifact URLs).
+   - Create a **Supabase Storage bucket** named `artifacts` for final pipeline outputs (PDFs, metrics, claim ledgers, LaTeX source).
+7. Implement the **scoped state view infrastructure**: create `backend/utils/state_pruning.py` containing the `build_scoped_view(state, node_name)` utility and the `NODE_SCOPE_CONFIG` dictionary that maps each AI node to its allowed state fields (see §2 Context Management).
 
 ### Phase 2: Define the Global State
 
@@ -873,6 +996,10 @@ class AutoResearchState(TypedDict):
     latex_repair_attempts: int
     final_pdf_path: Optional[str]              # None if No-Paper outcome
 
+    # Supabase Integration
+    run_id: str                                # UUID generated at pipeline start
+    artifact_urls: Dict[str, str]              # filename → Supabase Storage URL
+
     # Telemetry
     pipeline_status: str      # running | awaiting_hitl_hypothesis |
                               # awaiting_hitl_experiment | success |
@@ -921,6 +1048,8 @@ class AutoResearchState(TypedDict):
 | `latex_compile_log`       | str                     | Raw `.log` output from `pdflatex` (used by repair loop).                 |
 | `latex_repair_attempts`   | int                     | Number of repair iterations attempted (max 5).                           |
 | `final_pdf_path`          | Optional[str]           | Path to the compiled PDF, or `None` if No-Paper outcome.                 |
+| `run_id`                  | str                     | UUID generated at pipeline start; used as Supabase Storage path prefix.  |
+| `artifact_urls`           | Dict[str, str]          | Mapping of artifact filename → Supabase Storage download URL.            |
 | `pipeline_status`         | str                     | Current status: running, awaiting_hitl_hypothesis, awaiting_hitl_experiment, success, no_paper, or failed_*. |
 
 ### Phase 3: Build the Nodes
@@ -951,6 +1080,8 @@ Shared utilities under `backend/utils/`:
 - `claim_utils.py` — Claim ledger construction + evidence strength rating (accounts for `context_condition` when scoring)
 - `docker_utils.py` — Docker container lifecycle management with `:ro` volume mounts
 - `state_pruning.py` — `build_scoped_view(state, node_name)` utility + `NODE_SCOPE_CONFIG` dictionary for per-node state field allowlists
+- `supabase_client.py` — Supabase client singleton (initializes from `SUPABASE_URL` + `SUPABASE_SERVICE_KEY` env vars); shared by ArXiv Retriever (paper caching), Hypothesis Generator (pgvector prior-art queries), and artifact uploader
+- `artifact_uploader.py` — Post-pipeline artifact upload to Supabase Storage `artifacts/{run_id}/` bucket + `pipeline_runs` row update
 
 ### Phase 4: Orchestration with LangGraph
 
@@ -979,7 +1110,7 @@ Shared utilities under `backend/utils/`:
     - Evidence insufficient (> 50% weak/unsupported) → END (no_paper report).
 11. Define Phase 3 edge: Academic Writer (scoped: `claim_ledger` + `experiment_spec` + `metrics_json` + `incremental_delta` + `hypothesis`) → Deterministic Linter → Critique Panel (scoped: `latex_draft` + `bibtex_source` + `metrics_json` + `claim_ledger`).
 12. Define Phase 4 edges: Critique Panel (with debate) → Critique Aggregator (linter + debate warnings) → Academic Writer (one mandatory revision pass).
-13. Define Phase 5 edges: Academic Writer (revised) → LaTeX Compiler (with repair loop) → END.
+13. Define Phase 5 edges: Academic Writer (revised) → LaTeX Compiler (with repair loop) → Artifact Upload (Supabase Storage + `pipeline_runs` update) → END.
 14. Compile and expose the graph via a `run_pipeline(topic: str)` function.
 
 ### Phase 5: Testing & Iteration
@@ -995,6 +1126,8 @@ Shared utilities under `backend/utils/`:
 9. **AST Fragility:** Inject code using `importlib.import_module()` and verify the ML Coder's prompt constraints prevent it; if it slips through, verify the Dependency Resolver flags the unresolvable dynamic import.
 10. **State Pruning:** Verify that the ML Coder's scoped view contains only `experiment_spec` + `hypothesis` (not raw papers or KG); verify the Academic Writer's scoped view excludes `execution_logs` and `arxiv_papers_full_text`.
 11. **Conditional Claims (`context_condition`):** Provide papers with conditional findings (e.g., "method A outperforms B only on small datasets") and verify the KG edges carry the boundary condition; verify the Hypothesis Generator does not overgeneralize the conditional claim into an unconditional hypothesis.
+12. **Supabase Paper Caching:** Run two pipelines on overlapping topics; verify the second run retrieves papers from the Supabase `papers` table instead of re-downloading from arXiv; verify no duplicate arXiv IDs exist in the table.
+13. **Supabase Artifact Roundtrip:** Run a full pipeline and verify all expected artifacts are uploaded to the `artifacts/{run_id}/` Storage path; verify the `pipeline_runs` row has the correct final status; download the PDF via Supabase Storage URL and confirm it is valid.
 
 ---
 
@@ -1051,7 +1184,9 @@ mini-research-claw/
 │       ├── latex_utils.py           # pdflatex log parsing
 │       ├── claim_utils.py           # Claim ledger construction + evidence strength
 │       ├── docker_utils.py          # Docker container lifecycle + :ro mounts
-│       └── state_pruning.py         # build_scoped_view() + NODE_SCOPE_CONFIG
+│       ├── state_pruning.py         # build_scoped_view() + NODE_SCOPE_CONFIG
+│       ├── supabase_client.py       # Supabase client singleton (PostgreSQL + Storage)
+│       └── artifact_uploader.py     # Post-pipeline artifact upload to Supabase Storage
 │
 ├── tests/
 │   ├── test_arxiv_retriever.py
@@ -1070,6 +1205,8 @@ mini-research-claw/
 │   ├── test_critique_aggregator.py
 │   ├── test_latex_compiler.py
 │   ├── test_state_pruning.py
+│   ├── test_supabase_cache.py
+│   ├── test_artifact_uploader.py
 │   └── evals/
 │       ├── eval_kg_extractor.py
 │       ├── eval_hypothesis.py
@@ -1142,6 +1279,8 @@ mini-research-claw/
 | `test_critique_aggregator.py`    | Linter warnings + debate-surviving (unretracted) critiques are forwarded to the Writer. |
 | `test_state_pruning.py`          | `build_scoped_view()` returns only allowed fields per node; full state is never mutated; `NODE_SCOPE_CONFIG` covers all AI nodes. |
 | `test_latex_compiler.py`         | PDF generated on success; repair loop triggered on failure; max attempts respected.     |
+| `test_supabase_cache.py`         | Cache-first retrieval returns cached papers; new papers are inserted with embeddings; duplicate arXiv IDs are skipped; pgvector cosine query returns correct similarity rankings. |
+| `test_artifact_uploader.py`      | All expected artifacts are uploaded to the correct `artifacts/{run_id}/` path; `pipeline_runs` row is updated with final status and artifact path; missing artifacts (e.g., no PDF on failure) are handled gracefully. |
 
 ### 7.2 Integration Tests
 
@@ -1160,6 +1299,8 @@ mini-research-claw/
 - **AST fragility test:** Inject code using `importlib.import_module()` or `exec("import X")` and assert the pipeline rejects it or the Dependency Resolver flags unresolvable dynamic imports.
 - **State pruning test:** Run a full pipeline and assert that the ML Coder's LLM prompt does not contain `arxiv_papers_full_text` or `kg_entities`; assert the Academic Writer's prompt does not contain `execution_logs`.
 - **Conditional claims test (`context_condition`):** Provide papers with conditional findings and assert KG edges carry boundary conditions; assert the claim ledger rates conditional evidence supporting an unconditional claim as weaker than unconditional evidence.
+- **Supabase cache-first test:** Run two pipelines on overlapping topics; assert the second run retrieves cached papers from Supabase instead of re-downloading from arXiv; verify the `papers` table contains no duplicate arXiv IDs.
+- **Supabase artifact roundtrip test:** Run a full pipeline; assert all expected artifacts exist in the `artifacts/{run_id}/` Storage bucket; verify the `pipeline_runs` row has correct status and artifact path; download the PDF via Supabase Storage URL and verify it is a valid PDF.
 
 ### 7.3 Agent Evals (LLM-Specific)
 
@@ -1277,6 +1418,8 @@ File: `.github/workflows/ci.yml`
 ### 9.3 Secrets Management
 
 - `ANTHROPIC_API_KEY` stored as a GitHub Actions secret.
+- `SUPABASE_URL` stored as a GitHub Actions secret (Supabase project REST endpoint).
+- `SUPABASE_SERVICE_KEY` stored as a GitHub Actions secret (service-role key — bypasses RLS for server-side pipeline operations). **Never** use the anon key for backend operations.
 - `.env` file is in `.gitignore` — never committed.
 
 ---
@@ -1303,6 +1446,9 @@ File: `.github/workflows/ci.yml`
 - Open the generated NeurIPS PDF and walk through each section.
 - Trigger a forced failure to demonstrate the self-healing retry loop.
 - Demonstrate the **No-Paper outcome**: run a topic with insufficient evidence and show the pipeline terminating gracefully with a report.
+- Demonstrate **Supabase cache-first retrieval**: run a second pipeline on an overlapping topic and show that cached papers are retrieved instantly from the database instead of re-downloading from arXiv.
+- Show the **Supabase `pipeline_runs` table**: query it to list all historical runs with their topics, statuses, and artifact paths.
+- Demonstrate **artifact retrieval via Supabase Storage**: open the React Web UI and show it rendering the PDF, metrics, and claim ledger for a completed run — fetched directly from the `artifacts` bucket via download URLs.
 
 ### 10.2 Offline Demo (Screencast)
 
@@ -1324,7 +1470,7 @@ This section documents how AI tools were used throughout every phase of developm
 | ---------------------------- | -------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | User Stories & Backlog       | Claude / ChatGPT                       | Generated initial user stories from the project description; refined acceptance criteria.          |
 | Architecture & Diagrams      | Claude (Mermaid), ChatGPT (PlantUML)   | Generated UML sequence diagrams, component diagrams, and state machine diagrams from descriptions. |
-| Design Review & Overhauls    | Claude                                 | Analyzed architectural evaluation PDF and epistemic peer review; implemented 9 critical overhauls (KG polarity, iterative retrieval, prior-art screening, double HITL, claim ledger, No-Paper outcome, deterministic linter, context conditions, state pruning) plus 3 operational safeguards (AST fragility fix, scoped state views, conditional claims). |
+| Design Review & Overhauls    | Claude                                 | Analyzed architectural evaluation PDF and epistemic peer review; implemented 9 critical overhauls (KG polarity, iterative retrieval, prior-art screening, double HITL, claim ledger, No-Paper outcome, deterministic linter, context conditions, state pruning) plus 3 operational safeguards (AST fragility fix, scoped state views, conditional claims) plus Supabase cloud database integration (paper caching with pgvector, artifact storage, pipeline run tracking). |
 | Code Implementation          | GitHub Copilot, Claude                 | Auto-completed boilerplate, generated agent prompt templates, wrote Docker configuration.          |
 | Test Writing                 | Claude / Copilot                       | Generated pytest test cases and mock fixtures from function signatures.                           |
 | Agent Eval Design            | Claude                                 | Designed evaluation rubrics and LLM-as-judge prompts for coherence and relevance scoring.         |
@@ -1374,10 +1520,13 @@ The final `ai-usage-report.md` will include, for each area:
 | Heterogeneous Review Panel + Structured Debate + Claim Ledger | §2 (Node 7) | Planned |
 | KG + Claim Ledger-Grounded Fact-Checking (JSON Path Traversals) | §2 (Node 7, Agent A) | Planned |
 | LaTeX Compiler Repair Loop (up to 5 attempts) | §2 (Node 9) | Planned |
-| User Stories (31) + Product Backlog (5 sprints) | §3 | Planned |
+| Supabase Cache-First Paper Retrieval (pgvector + `papers` table) | §2 (Node 1) | Planned |
+| Supabase pgvector Prior-Art Screening (full historical corpus) | §2 (Node 3) | Planned |
+| Supabase Artifact Upload (Storage bucket + `pipeline_runs` table) | §2 (Phase 5, post-Node 9) | Planned |
+| User Stories (34) + Product Backlog (5 sprints) | §3 | Planned |
 | Diagrams (5 total) | §4 | Planned |
 | Git Strategy (branches, PRs, conventional commits) | §6 | Planned |
-| Automated Tests (16 unit + 15 integration) + Agent Evals (28 evals) | §7 | Planned |
+| Automated Tests (18 unit + 17 integration) + Agent Evals (28 evals) | §7 | Planned |
 | Bug Reporting + Resolution via PR | §8 | Planned |
 | CI/CD Pipeline (GitHub Actions) | §9 | Planned |
 | NeurIPS PDF Generation (LaTeX + BibTeX + Repair Loop) | §2 (Phase 5) | Planned |
