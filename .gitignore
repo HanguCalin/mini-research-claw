@@ -33,3 +33,27 @@ dist-ssr
 
 # OS files
 Thumbs.db
+
+# ── Python (Auto-Mini-Claw backend) ──────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Pipeline caches (host-side artifacts pre-fetched for the network=none sandbox)
+.cache/
+
+# Local pipeline outputs (PDFs, .tex, metrics, debug logs)
+artifacts/
+runs/
+
