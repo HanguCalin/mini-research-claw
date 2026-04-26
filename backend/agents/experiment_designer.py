@@ -15,6 +15,7 @@ import anthropic
 
 from backend.config import MODELS
 from backend.state import AutoResearchState, ExperimentSpec
+from backend.utils.llm_utils import extract_json, extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def experiment_designer(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = json.loads(response.content[0].text)
+    raw = extract_json(extract_text(response))
 
     missing = [f for f in REQUIRED_FIELDS if not raw.get(f)]
     if missing:

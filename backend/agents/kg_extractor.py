@@ -10,7 +10,6 @@ resolution, contested-pair detection).
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -18,6 +17,7 @@ import anthropic
 
 from backend.config import MODELS
 from backend.state import AutoResearchState, KGEdge, KGEntity
+from backend.utils.llm_utils import extract_json, extract_text
 from backend.utils.kg_utils import (
     deduplicate_edges,
     deduplicate_entities_sbert,
@@ -91,8 +91,8 @@ def kg_extractor(state: AutoResearchState) -> dict[str, Any]:
                 system=EXTRACTION_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": paper_text}],
             )
-            raw = json.loads(response.content[0].text)
-        except (json.JSONDecodeError, IndexError, anthropic.APIError) as exc:
+            raw = extract_json(extract_text(response))
+        except (ValueError, anthropic.APIError) as exc:
             logger.warning("KG extraction failed for %s: %s", paper_id, exc)
             continue
 

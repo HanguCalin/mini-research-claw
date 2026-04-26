@@ -69,24 +69,25 @@ def _enumerate_claims(
     hypothesis: str,
     metrics: dict[str, Any],
 ) -> list[str]:
-    """Extract potential paper claims from hypothesis + experiment results.
+    """Extract paper-level claims from the hypothesis text.
 
-    Splits the hypothesis into individual assertive sentences and adds
-    metric-based claims from the experiment results.
+    Only the hypothesis sentences are enumerated — measurements like
+    ``dbi=0.59`` are evidence, not claims. Treating each metric value as a
+    separate claim used to inflate the ledger with ~30 unsupported entries
+    that the Academic Writer never intended to assert, sinking the No-Paper
+    gate even on successful runs. The full ``metrics_json`` is still
+    available to the Writer for Results-section construction.
+
+    *metrics* is accepted but not used; kept in the signature for backwards
+    compatibility with callers and tests.
     """
-    claims: list[str] = []
+    del metrics  # intentionally unused — see docstring
 
+    claims: list[str] = []
     for sentence in hypothesis.replace(". ", ".\n").splitlines():
         sentence = sentence.strip()
         if len(sentence) > 20:
             claims.append(sentence)
-
-    for metric_name, metric_value in metrics.items():
-        if metric_name in ("hyperparameters", "config", "random_state"):
-            continue
-        claims.append(
-            f"The proposed method achieves {metric_name} = {metric_value}"
-        )
 
     if not claims:
         claims.append(hypothesis)

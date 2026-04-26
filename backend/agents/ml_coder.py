@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import anthropic
@@ -48,12 +49,19 @@ Return ONLY the Python code — no markdown fences, no explanation.
 RETRY_SYSTEM_PROMPT = """\
 You are a constrained ML experiment coder performing a RETRY.
 
-The previous code FAILED with the execution logs below. You MUST:
+The previous code FAILED with the execution logs below. Internally:
 1. Perform ROOT-CAUSE ANALYSIS — identify exactly why it failed.
 2. Fix the root cause, do not blindly regenerate.
 3. Follow ALL the same constraints as the original prompt.
 
-Return ONLY the fixed Python code — no markdown fences, no explanation.
+CRITICAL OUTPUT RULES:
+- Return ONLY valid Python source code.
+- The FIRST CHARACTER of your response must be a valid Python token
+  (e.g. `import`, `from`, `#`, `\"\"\"`, `def`).
+- Do NOT include analysis, commentary, explanation, or markdown.
+- Do NOT prefix the code with sentences like "The previous code…" or
+  "I will fix…". Keep all reasoning internal.
+- If you must explain something, use a Python `#` comment INSIDE the script.
 """
 
 
@@ -91,8 +99,8 @@ def ml_coder(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    code = response.content[0].text.strip()
-    code = _strip_markdown_fences(code)
+    raw = response.content[0].text
+    code = _extract_python_code(raw)
 
     return {
         "python_code": code,
@@ -100,11 +108,54 @@ def ml_coder(state: AutoResearchState) -> dict[str, Any]:
     }
 
 
-def _strip_markdown_fences(code: str) -> str:
-    """Remove markdown code fences if the LLM wraps output despite instructions."""
-    lines = code.splitlines()
-    if lines and lines[0].startswith("```"):
-        lines = lines[1:]
-    if lines and lines[-1].startswith("```"):
-        lines = lines[:-1]
-    return "\n".join(lines)
+# Lines that look like the start of real Python code. If the LLM prepends
+# prose ("The previous code had…"), we skip until we hit one of these.
+_PYTHON_LINE_PATTERN = re.compile(
+    r"""^(
+        import\s | from\s | def\s | class\s | @ |
+        \#       | "{3}   | '{3}  |
+        if\s__name__ |
+        try: | with\s | for\s | while\s |
+        [A-Z_][A-Z0-9_]*\s*=        # ALL-CAPS module-level constant
+    )""",
+    re.VERBOSE,
+)
+
+
+def _extract_python_code(text: str) -> str:
+    r"""Pull just the Python source out of an LLM response.
+
+    Handles three cases:
+      1. A ```python ... ``` (or bare ``` ... ```) fenced block.
+      2. Prose preamble before the code (the bug that crashed us at retry).
+      3. Trailing prose after the code.
+    """
+    # 1. Prefer the first fenced code block if present.
+    fence_match = re.search(
+        r"```(?:python|py)?\s*\n(.*?)\n```",
+        text,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    if fence_match:
+        return fence_match.group(1).strip()
+
+    # 2. Otherwise scan for the first line that starts with a Python token.
+    lines = text.splitlines()
+    start_idx = None
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if not stripped:
+            continue
+        if _PYTHON_LINE_PATTERN.match(stripped):
+            start_idx = i
+            break
+
+    if start_idx is None:
+        # Nothing looks like Python — return the original (the executor will
+        # fail loudly and the diagnostic uploader will capture this for us).
+        return text.strip()
+
+    # 3. Strip any trailing markdown fence that might still be hanging around.
+    cleaned = "\n".join(lines[start_idx:]).strip()
+    cleaned = re.sub(r"\n```\s*$", "", cleaned)
+    return cleaned

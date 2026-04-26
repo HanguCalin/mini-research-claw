@@ -16,6 +16,7 @@ import anthropic
 
 from backend.config import MODELS
 from backend.state import AutoResearchState
+from backend.utils.llm_utils import extract_json, extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ def _first_pass(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = json.loads(response.content[0].text)
+    raw = extract_json(extract_text(response))
 
     return {
         "latex_draft": raw["latex_draft"],
@@ -135,7 +136,7 @@ def _revision_pass(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = json.loads(response.content[0].text)
+    raw = extract_json(extract_text(response))
 
     return {
         "latex_draft": raw["latex_draft"],

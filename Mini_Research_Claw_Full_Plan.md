@@ -144,7 +144,7 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 > **Epistemic Review Finding:** The original edge resolution step discards contradictory edges, keeping only the highest-confidence edge per triple. This destroys critical scientific signal — contradictions between papers are among the most valuable inputs for hypothesis generation. A paper that says "method A outperforms B" and another saying "method B outperforms A" should both be preserved with opposing polarity.
 
-- **Model:** Claude 3.5 Haiku (fast, cost-effective for structured extraction).
+- **Model:** Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) (fast, cost-effective for structured extraction).
 
 - **What is an Epistemic KG?** A traditional knowledge graph stores facts as triples: `(entity A, relation, entity B)`. An **epistemic** knowledge graph adds a fourth dimension: **polarity** — whether the source paper *supports*, *contradicts*, or is *neutral* toward that relation. This means the KG can represent scientific disagreement, not just consensus. For example, if Paper 1 claims "Random Forest outperforms XGBoost on tabular data" and Paper 2 claims "XGBoost outperforms Random Forest on tabular data", a traditional KG would discard one of these edges (keeping only the highest-confidence one). An epistemic KG preserves **both** edges with opposing polarity, creating a **contested pair** that signals an unresolved scientific question — exactly the kind of gap that makes for a strong research hypothesis.
 
@@ -253,22 +253,36 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 > **Epistemic Review Finding:** The original generator produces a hypothesis in isolation without articulating what it adds beyond existing work. An incremental approach — where the generator must explicitly state the `incremental_delta` (what is new compared to the closest prior art) — forces genuine novelty and makes the hypothesis reviewable by the HITL operator.
 
-- **Model:** Claude 3.7 Sonnet (advanced reasoning for hypothesis formulation).
+- **Model:** Claude Sonnet 4.6 (`claude-sonnet-4-6`) (advanced reasoning for hypothesis formulation).
 - **System Prompt:** "Formulate a highly specific, testable research hypothesis strictly grounded in the technical entities extracted into the Knowledge Graph. **Pay special attention to contested edges** (opposing polarity) in the KG — contradictions between papers are prime targets for novel hypotheses that could resolve the disagreement. When referencing datasets, you MUST use real, verifiable, public dataset IDs from the Hugging Face Hub (e.g., `imdb`, `glue`, `squad`) or scikit-learn. Do NOT hallucinate dataset names or local file paths. You MUST also produce an `incremental_delta` field: a 2–3 sentence explanation of what your hypothesis adds beyond the closest existing work in the KG."
 - **Responsibility:** Formulate a testable hypothesis grounded in the KG entities, exploiting contradictions where present. The hypothesis is validated against KG entities to prevent hallucination. Outputs both `hypothesis` and `incremental_delta` to state.
 
 - **Automated Novelty Detection + Prior-Art Screening Protocol** (deterministic post-step):
   1. Embed the generated hypothesis using SBERT (`all-MiniLM-L6-v2`).
-  2. **Prior-Art Similarity via Supabase `pgvector`:** Instead of embedding paper abstracts in-memory (which only covers the 5–15 papers retrieved for this run), the prior-art similarity score is computed **natively in the database** against the **entire historical corpus** of all papers ever processed by the system. This is a single SQL query:
+  2. **Prior-Art Similarity via Supabase `pgvector`:** Instead of embedding paper abstracts in-memory (which only covers the 5–15 papers retrieved for this run), the prior-art similarity score is computed **natively in the database** against the **entire historical corpus** of all papers ever processed by the system. This is a single RPC call to the `match_papers` Postgres function (defined once during setup):
 
      ```sql
-     SELECT arxiv_id, title, 1 - (embedding <=> :hypothesis_embedding) AS similarity
-     FROM papers
-     ORDER BY embedding <=> :hypothesis_embedding
-     LIMIT 10;
+     -- One-time setup (run in Supabase SQL Editor):
+     CREATE OR REPLACE FUNCTION match_papers(
+       query_embedding   vector(384),
+       match_count       int    DEFAULT 10,
+       exclude_arxiv_ids text[] DEFAULT '{}'
+     )
+     RETURNS TABLE (arxiv_id text, title text, similarity float)
+     LANGUAGE sql STABLE
+     AS $$
+       SELECT papers.arxiv_id, papers.title,
+              1 - (papers.embedding <=> query_embedding) AS similarity
+       FROM papers
+       WHERE papers.arxiv_id <> ALL(exclude_arxiv_ids)
+       ORDER BY papers.embedding <=> query_embedding
+       LIMIT match_count;
+     $$;
      ```
 
-     The `<=>` operator computes cosine distance using the `pgvector` IVFFlat index — sub-millisecond on corpora of 10K+ papers. The **Prior-Art Similarity Score** is the maximum `similarity` value from the result. This is strictly superior to in-memory comparison because it screens against hundreds or thousands of previously seen papers, not just the handful retrieved for the current run.
+     The Hypothesis Generator calls this RPC passing the **current run's arXiv IDs as `exclude_arxiv_ids`** — without exclusion the gate is circular: the hypothesis is grounded in the papers Node 1 just fetched, so they always look maximally similar and trip the ceiling on every successful generation.
+
+     The `<=>` operator computes cosine distance using the `pgvector` IVFFlat index — sub-millisecond on corpora of 10K+ papers. The **Prior-Art Similarity Score** is the maximum `similarity` value from the (post-exclusion) result. This is strictly superior to in-memory comparison because it screens against hundreds or thousands of previously seen *historical* papers, not just the handful retrieved for the current run.
 
   3. Compute **Relative Neighbor Density (RND):** the average cosine distance from the hypothesis embedding to the K nearest literature embeddings (also retrieved from the `pgvector` query above).
   4. Apply dual gating:
@@ -305,7 +319,7 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 > **Epistemic Review Finding:** The original pipeline jumps directly from hypothesis approval to code generation, giving the ML Coder unconstrained freedom to choose datasets, metrics, and experimental setups. This creates a gap where the human approves a hypothesis but has no visibility into how it will be tested. An intermediate Experimental Designer node produces a structured, human-reviewable experiment specification before any code is written.
 
-- **Model:** Claude 3.7 Sonnet (advanced reasoning for experimental design).
+- **Model:** Claude Sonnet 4.6 (`claude-sonnet-4-6`) (advanced reasoning for experimental design).
 - **System Prompt:** "You are an expert experimental designer. Given the approved hypothesis, the Knowledge Graph (including contested edges), and the incremental delta, design a rigorous experiment. Output a structured `ExperimentSpec` JSON with: `independent_var` (what you're manipulating), `dependent_var` (what you're measuring), `control_description` (baseline/control condition), `dataset_id` (a real, verifiable public dataset from Hugging Face Hub or scikit-learn), `evaluation_metrics` (list of metrics, e.g., accuracy, F1, AUC), and `expected_outcome` (what result would support/refute the hypothesis). Justify each choice in 1–2 sentences."
 - **Responsibility:** Translate the approved hypothesis into a concrete, structured experiment specification. This specification becomes the contract that constrains the ML Coder downstream.
 - **Output:** Writes `experiment_spec` to state.
@@ -336,7 +350,7 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 > **Epistemic Review Finding:** The original ML Coder receives only the hypothesis and KG, giving it unconstrained freedom to choose datasets, metrics, and experimental setups that may not match what the human approved. Binding the coder to the approved `ExperimentSpec` ensures the generated code implements exactly the experiment that was reviewed and approved.
 
-- **Model:** Claude 3.7 Sonnet (advanced reasoning and software engineering).
+- **Model:** Claude Sonnet 4.6 (`claude-sonnet-4-6`) (advanced reasoning and software engineering).
 - **System Prompt:** "You are an expert data scientist. Read the validated hypothesis, the rich KG with actual implementation details, and the **approved ExperimentSpec**. Write a self-contained, methodologically rigorous Python script that **strictly implements the approved ExperimentSpec** — you MUST use the specified `dataset_id`, `evaluation_metrics`, and `independent_var`/`dependent_var`. Do NOT deviate from the approved experimental design. You MUST: (1) explicitly separate train and test data to prevent data leakage; (2) use cross-validation where applicable; (3) set random seeds (e.g., `random_state=42`) for full reproducibility; (4) use the dataset ID from the ExperimentSpec via Hugging Face Hub (e.g., `load_dataset('imdb')`) or scikit-learn — do NOT hallucinate local file paths or custom dataset names; (5) save a detailed log of all hyperparameters used alongside evaluation metrics into `metrics.json`; (6) compute all metrics listed in the ExperimentSpec. Output ONLY valid Python code."
 
 - **Import & Dependency Safety Constraints (AST Fragility Fix):**
@@ -408,14 +422,14 @@ The system consists of **14 sequential nodes**, with **8 AI-powered agents** and
 
 #### Node 6: Academic Writer (AI) — *Upgraded: Claim Ledger-Grounded Writing*
 
-- **Model:** Claude 3.7 Sonnet (excellent at academic tone and long-context synthesis).
+- **Model:** Claude Sonnet 4.6 (`claude-sonnet-4-6`) (excellent at academic tone and long-context synthesis).
 - **System Prompt:** "You are an academic writer. Synthesize the full-text literature, the hypothesis, the incremental delta, and the experiment metrics to write an academic paper directly in LaTeX, following the IMRaD structure (Introduction, Methods, Results, Conclusion). You are provided with a **claim ledger** that maps each potential claim to its supporting and contradicting KG evidence. You MUST: (1) Only make claims rated `strong` or `moderate` in the claim ledger — do NOT include `weak` or `unsupported` claims. (2) For claims with contradicting evidence, acknowledge the contradiction in the text (e.g., 'While [Author2024] reports contradictory findings...'). (3) Use standard LaTeX citation commands (e.g., `\cite{AuthorYear}`) seamlessly in the text — do NOT use raw IDs or inline provenance tags. (4) Generate a corresponding `references.bib` file containing the BibTeX entries for all cited papers. Ensure the bibliography is rendered at the bottom of the final NeurIPS paper via `\bibliography{references}`. Do not state information as absolute truth if it cannot be traced back to the literature context."
 - **Responsibility:** Synthesize the full-text literature, the hypothesis, `incremental_delta`, and `metrics_json` results to write the first draft of the paper directly in **LaTeX** (`draft.tex`), following the IMRaD structure. The claim ledger constrains which assertions can appear in the paper. Generate a companion `references.bib` with proper BibTeX entries (using paper metadata: authors, year, title, arXiv ID from the state). All citations use `\cite{AuthorYear}` — no raw arXiv IDs in prose. Writes to `latex_draft` and `bibtex_source` in the state.
 - **Revision pass (after review):** Addresses each surviving critique from the debate-filtered review, produces `revised_latex`, and appends a **Confidence Score** (self-assessed 1–10) and the NeurIPS reproducibility checklist. Only one mandatory revision pass occurs — unbounded loops lead to model degradation and structural decay.
 
 ### Phase 4: Critique & Linting Engine (Automated Quality Assurance) — *Overhauled: Heterogeneous Models + Structured Debate + Deterministic Linter*
 
-> **Design Review Finding:** Using three identical Claude 3.5 Haiku instances creates an "Artificial Hivemind" — agents share identical weights, biases (verbosity bias, self-enhancement bias), and RLHF alignment. They form rapid consensus on superficial critiques rather than catching deep methodological flaws. This is the echo-chamber effect documented in the NeurIPS 2025 Best Paper "Artificial Hivemind."
+> **Design Review Finding:** Using three identical Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) instances creates an "Artificial Hivemind" — agents share identical weights, biases (verbosity bias, self-enhancement bias), and RLHF alignment. They form rapid consensus on superficial critiques rather than catching deep methodological flaws. This is the echo-chamber effect documented in the NeurIPS 2025 Best Paper "Artificial Hivemind."
 
 #### Node 6b: Deterministic Linter (Non-AI) — *New Node: Rule-Based Pre-Check*
 
@@ -437,9 +451,9 @@ Three independent agents read the `draft.tex` and produce structured warnings, u
 
 | Reviewer | Role | Model | Focus |
 |----------|------|-------|-------|
-| **Agent A: Fact-Checker** | Verify empirical claims against KG + claim ledger | Claude 3.7 Sonnet | **Algorithmically queries `kg_entities`, `kg_edges`, and `claim_ledger` via strict JSON path traversals** — does NOT rely on parametric memory. Its system prompt includes the serialized JSON of the KG and the claim ledger. Must cite specific entity IDs, edge relations, and claim ledger entries when verifying/refuting claims. Any claim not traceable to a KG triple is flagged as `ungrounded`. **New:** Also verifies that contradicting evidence acknowledged in the claim ledger is properly discussed in the paper text — suppressed contradictions are flagged as `contradiction_suppressed`. |
-| **Agent B: Methodologist** | Evaluate experimental rigor | Claude 3.5 Haiku | Checks if code results in `metrics.json` logically support conclusions. Verifies the code implemented the approved `ExperimentSpec` (correct dataset, metrics, variables). Flags unsupported claims, missing error bars, unjustified generalizations, incorrect statistical reasoning. Uses a **different model** than Agent A to ensure diverse cognitive architecture. |
-| **Agent C: Formatter** | Assess structure & LaTeX quality | Claude 3.5 Haiku (different system prompt persona) | Checks for AI-slop writing style, excessive verbosity, missing NeurIPS checklist items, LaTeX structural integrity, citation formatting, figure/table labelling. **Note:** Many of Agent C's previous checks are now handled by the deterministic linter — Agent C focuses on subjective quality (writing style, argumentation flow, clarity). |
+| **Agent A: Fact-Checker** | Verify empirical claims against KG + claim ledger | Claude Sonnet 4.6 (`claude-sonnet-4-6`) | **Algorithmically queries `kg_entities`, `kg_edges`, and `claim_ledger` via strict JSON path traversals** — does NOT rely on parametric memory. Its system prompt includes the serialized JSON of the KG and the claim ledger. Must cite specific entity IDs, edge relations, and claim ledger entries when verifying/refuting claims. Any claim not traceable to a KG triple is flagged as `ungrounded`. **New:** Also verifies that contradicting evidence acknowledged in the claim ledger is properly discussed in the paper text — suppressed contradictions are flagged as `contradiction_suppressed`. |
+| **Agent B: Methodologist** | Evaluate experimental rigor | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Checks if code results in `metrics.json` logically support conclusions. Verifies the code implemented the approved `ExperimentSpec` (correct dataset, metrics, variables). Flags unsupported claims, missing error bars, unjustified generalizations, incorrect statistical reasoning. Uses a **different model** than Agent A to ensure diverse cognitive architecture. |
+| **Agent C: Formatter** | Assess structure & LaTeX quality | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) (different system prompt persona) | Checks for AI-slop writing style, excessive verbosity, missing NeurIPS checklist items, LaTeX structural integrity, citation formatting, figure/table labelling. **Note:** Many of Agent C's previous checks are now handled by the deterministic linter — Agent C focuses on subjective quality (writing style, argumentation flow, clarity). |
 
 **Structured Debate Protocol** (replaces passive vote aggregation):
 
@@ -485,7 +499,7 @@ This ensures superficial consensus is broken. The debate log is preserved in `de
                       │
                       ▼
               ┌───────────────┐
-              │ LaTeX Repair  │  (Claude 3.5 Haiku)
+              │ LaTeX Repair  │  (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`))
               │ Agent         │
               └───────┬───────┘
                       │
@@ -509,7 +523,7 @@ This ensures superficial consensus is broken. The debate log is preserved in `de
 
 - **LaTeX Log Parser** (deterministic Python): Reads the raw `.log` file produced by `pdflatex`. Extracts: line number, error type, error message, and ±5 lines of surrounding LaTeX context. Does **NOT** feed the entire manuscript back to the LLM — only the localized error context (saves tokens and prevents destabilizing correct sections).
 
-- **LaTeX Repair Agent** (Claude 3.5 Haiku): Receives only the error context (line number + surrounding snippet + compiler error message). Produces a targeted, **line-level patch** (old line → new line). The patch is applied surgically; untouched sections remain stable.
+- **LaTeX Repair Agent** (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)): Receives only the error context (line number + surrounding snippet + compiler error message). Produces a targeted, **line-level patch** (old line → new line). The patch is applied surgically; untouched sections remain stable.
 
 - **Loop:** compile → parse log → repair → compile → ... until success or `max_latex_repair_attempts` (default: 5) is exhausted. If exhausted, pipeline terminates with `failed_latex` status and preserves the `.tex` source for manual inspection.
 
@@ -774,7 +788,7 @@ Phase 5: Publication      │
              final.pdf        line + error + context
                                    │
                               [LaTeX Repair Agent]
-                              (Claude 3.5 Haiku)
+                              (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`))
                               line-level patch
                                    │
                               Re-invoke pdflatex

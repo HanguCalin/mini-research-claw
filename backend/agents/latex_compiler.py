@@ -7,7 +7,6 @@ loop up to max_latex_repair_attempts.
 
 from __future__ import annotations
 
-import json
 import logging
 import tempfile
 from pathlib import Path
@@ -17,6 +16,7 @@ import anthropic
 
 from backend.config import MODELS, THRESHOLDS
 from backend.state import AutoResearchState
+from backend.utils.llm_utils import extract_json, extract_text
 from backend.utils.latex_utils import (
     apply_line_patch,
     compile_latex,
@@ -120,7 +120,7 @@ def _get_repair_patch(error: Any) -> dict[str, Any] | None:
             system=REPAIR_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": error_context}],
         )
-        return json.loads(response.content[0].text)
-    except (json.JSONDecodeError, anthropic.APIError) as exc:
+        return extract_json(extract_text(response))
+    except (ValueError, anthropic.APIError) as exc:
         logger.warning("Repair LLM call failed: %s", exc)
         return None

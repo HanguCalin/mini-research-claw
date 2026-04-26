@@ -19,6 +19,7 @@ import anthropic
 
 from backend.config import MODELS
 from backend.state import AutoResearchState, DebateEntry
+from backend.utils.llm_utils import extract_json, extract_text
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ The paper context:
 {paper_context}
 
 Return JSON array (empty if you agree with everything):
-[{"target_critique_index": 0, "challenge": "..."}]
+[{{"target_critique_index": 0, "challenge": "..."}}]
 """
 
 DEFEND_PROMPT = """\
@@ -137,9 +138,9 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_msg}],
             )
-            critiques = json.loads(response.content[0].text)
+            critiques = extract_json(extract_text(response))
             all_critiques[role] = critiques if isinstance(critiques, list) else []
-        except (json.JSONDecodeError, anthropic.APIError) as exc:
+        except (ValueError, anthropic.APIError) as exc:
             logger.warning("Critique from %s failed: %s", role, exc)
             all_critiques[role] = []
 
@@ -168,11 +169,11 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
                 max_tokens=2048,
                 messages=[{"role": "user", "content": prompt}],
             )
-            raw_challenges = json.loads(response.content[0].text)
+            raw_challenges = extract_json(extract_text(response))
             for ch in raw_challenges:
                 ch["challenger_role"] = challenger_role
             challenges.extend(raw_challenges)
-        except (json.JSONDecodeError, anthropic.APIError):
+        except (ValueError, anthropic.APIError):
             pass
 
     # ── Phase 3: Defend-or-retract ───────────────────────────────────────
@@ -206,7 +207,7 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
             )
-            result = json.loads(response.content[0].text)
+            result = extract_json(extract_text(response))
             action = result.get("action", "defend")
             response_text = result.get("response", "")
 
@@ -222,7 +223,7 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
                 response=response_text,
                 resolved=resolved,
             ))
-        except (json.JSONDecodeError, anthropic.APIError):
+        except (ValueError, anthropic.APIError):
             pass
 
     # ── Phase 4: Resolution ──────────────────────────────────────────────

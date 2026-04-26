@@ -7,7 +7,6 @@ Part B: SBERT embedding → pgvector prior-art screening → dual novelty gating
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -16,6 +15,7 @@ import anthropic
 from backend.config import MODELS, THRESHOLDS
 from backend.state import AutoResearchState
 from backend.utils.embeddings import embed_single
+from backend.utils.llm_utils import extract_json, extract_text
 from backend.utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ def hypothesis_generator(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = json.loads(response.content[0].text)
+    raw = extract_json(extract_text(response))
     hypothesis = raw["hypothesis"]
     incremental_delta = raw.get("incremental_delta", "")
     mentioned = raw.get("mentioned_entities", [])
@@ -81,7 +81,16 @@ def hypothesis_generator(state: AutoResearchState) -> dict[str, Any]:
 
     hypothesis_embedding = embed_single(hypothesis)
 
-    novelty_score, prior_art_similarity = _pgvector_novelty_check(hypothesis_embedding)
+    # Exclude papers fetched in THIS run from the prior-art lookup — the
+    # hypothesis is grounded in them, so comparing against them is circular.
+    current_run_ids = [
+        p["arxiv_id"] for p in state.get("arxiv_papers_full_text", [])
+        if p.get("arxiv_id")
+    ]
+    novelty_score, prior_art_similarity = _pgvector_novelty_check(
+        hypothesis_embedding,
+        exclude_arxiv_ids=current_run_ids,
+    )
 
     novelty_passed = (
         novelty_score >= THRESHOLDS.novelty_threshold
@@ -133,29 +142,40 @@ def _build_kg_summary(
 
 def _pgvector_novelty_check(
     hypothesis_embedding: list[float],
+    exclude_arxiv_ids: list[str] | None = None,
 ) -> tuple[float, float]:
     """Query Supabase pgvector for prior-art similarity and compute RND.
+
+    Excludes any *exclude_arxiv_ids* (typically the current run's freshly
+    retrieved papers) so the novelty check measures distance from HISTORICAL
+    prior art rather than from the corpus the hypothesis was grounded in.
 
     Returns (novelty_score_rnd, max_prior_art_similarity).
     """
     sb = get_supabase()
     top_k = THRESHOLDS.prior_art_top_k
+    exclude = exclude_arxiv_ids or []
 
     response = sb.rpc(
         "match_papers",
         {
             "query_embedding": hypothesis_embedding,
-            "match_count": top_k,
+            "match_count": top_k + len(exclude),
+            "exclude_arxiv_ids": exclude,
         },
     ).execute()
 
     if not response.data:
         return 1.0, 0.0
 
-    similarities = [row["similarity"] for row in response.data]
-    max_similarity = max(similarities) if similarities else 0.0
+    rows = [r for r in response.data if r["arxiv_id"] not in set(exclude)][:top_k]
+    if not rows:
+        return 1.0, 0.0
+
+    similarities = [row["similarity"] for row in rows]
+    max_similarity = max(similarities)
 
     distances = [1.0 - s for s in similarities]
-    avg_distance = sum(distances) / len(distances) if distances else 1.0
+    avg_distance = sum(distances) / len(distances)
 
     return avg_distance, max_similarity

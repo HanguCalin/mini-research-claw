@@ -45,6 +45,11 @@ def upload_artifacts(state: AutoResearchState) -> dict[str, str]:
         ("debate_log.json", _json_dump(state.get("debate_log"))),
         ("draft.tex", state.get("latex_draft")),
         ("references.bib", state.get("bibtex_source")),
+        # Diagnostics — always uploaded if present so we can debug failures.
+        ("python_code.py", state.get("python_code")),
+        ("execution_logs.txt", state.get("execution_logs")),
+        ("hypothesis.txt", state.get("hypothesis")),
+        ("experiment_spec.json", _json_dump(state.get("experiment_spec"))),
     ]
 
     pdf_path = state.get("final_pdf_path")
@@ -61,6 +66,13 @@ def upload_artifacts(state: AutoResearchState) -> dict[str, str]:
         report = {
             "status": status,
             "run_id": run_id,
+            "topic": state.get("topic"),
+            "retrieval_round": state.get("retrieval_round"),
+            "code_retry_count": state.get("code_retry_count"),
+            "latex_repair_attempts": state.get("latex_repair_attempts"),
+            # Tail of execution logs — full logs are uploaded separately
+            # as execution_logs.txt for the failed_execution case.
+            "execution_logs_tail": (state.get("execution_logs") or "")[-4000:],
             "logs": state.get("logs", []),
         }
         artifacts.append(("failure_report.json", json.dumps(report, indent=2)))

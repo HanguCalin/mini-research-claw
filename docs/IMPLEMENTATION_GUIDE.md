@@ -128,23 +128,65 @@ CREATE TABLE pipeline_runs (
 );
 ```
 
-**Step 4: Create the `artifacts` Storage bucket**
+**Step 4: Create the `match_papers` RPC function**
 
-In the Supabase Dashboard, go to **Storage** and create a bucket named `artifacts`. This stores pipeline outputs (PDFs, metrics, claim ledgers, LaTeX source) organized by `{run_id}/`.
+Node 3 (Hypothesis Generator) calls this Postgres function to perform the pgvector cosine-similarity prior-art lookup. It accepts an exclusion list so the current run's freshly retrieved papers (which the hypothesis was grounded in) are not counted against novelty — without this, the gate is circular and every hypothesis trips it. See §3 Node 3.
+
+```sql
+DROP FUNCTION IF EXISTS match_papers(vector, int);
+
+CREATE OR REPLACE FUNCTION match_papers(
+  query_embedding   vector(384),
+  match_count       int      DEFAULT 10,
+  exclude_arxiv_ids text[]   DEFAULT '{}'
+)
+RETURNS TABLE (
+  arxiv_id   text,
+  title      text,
+  similarity float
+)
+LANGUAGE sql STABLE
+AS $$
+  SELECT
+    papers.arxiv_id,
+    papers.title,
+    1 - (papers.embedding <=> query_embedding) AS similarity
+  FROM papers
+  WHERE papers.arxiv_id <> ALL(exclude_arxiv_ids)
+  ORDER BY papers.embedding <=> query_embedding
+  LIMIT match_count;
+$$;
+```
+
+**Step 5: Create the `artifacts` Storage bucket**
+
+In the Supabase Dashboard, go to **Storage** and create a bucket named `artifacts`. This stores pipeline outputs (PDFs, metrics, claim ledgers, LaTeX source, plus diagnostic artifacts on failure — see §3 Artifact Uploader) organized by `{run_id}/`.
 
 ### 1.6 Supabase Client Utility
 
 Create `backend/utils/supabase_client.py` — a singleton that initializes the Supabase client from env vars (`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`). This client is shared by:
 - **Node 1** (ArXiv Retriever) — for paper cache lookups and inserts.
-- **Node 3** (Hypothesis Generator) — for pgvector prior-art cosine queries.
+- **Node 3** (Hypothesis Generator) — for pgvector prior-art cosine queries via the `match_papers` RPC (§1.5 Step 4).
 - **Artifact Uploader** — for Storage bucket uploads and `pipeline_runs` updates.
 
-### 1.7 Configuration Module
+### 1.7 LLM Output-Parsing Utility
+
+Create `backend/utils/llm_utils.py` exposing:
+- `extract_text(response)` — pulls `response.content[0].text` from an Anthropic `Message` with a clear error if the content block is empty.
+- `extract_json(text)` — strips ```` ```json ... ``` ```` markdown fences, tolerates prose preamble/trailing, finds the first balanced `{...}` or `[...]`, and parses it.
+
+**Why this exists:** Claude routinely wraps JSON in markdown fences or prepends "Here is the JSON:" prose despite explicit prompt instructions. Calling `json.loads(response.content[0].text)` directly will crash with `JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. Every agent that parses structured LLM output must use `extract_json(extract_text(response))` instead.
+
+This utility is used by Nodes 2, 3, 3c, 6, 7, 9 and `kg_utils._llm_pick_canonical`.
+
+### 1.8 Configuration Module
 
 Create `backend/config.py` to centralize:
 - Model assignments per node (e.g., Node 2 → `claude-haiku-4-5-20251001`, Node 3 → `claude-sonnet-4-6`).
 - Threshold constants: `novelty_threshold = 0.35`, `prior_art_ceiling = 0.90`, `max_retrieval_rounds = 3`, `max_code_retries = 3`, `max_latex_repair_attempts = 5`.
 - Docker sandbox settings: memory limit, CPU limit, volume mount paths.
+
+> **Early-stage testing tip.** When the `papers` cache is small (< ~100 rows), the prior-art ceiling fires on almost any hypothesis on a familiar topic because the corpus is dominated by the current run's freshly fetched papers. Temporarily set `prior_art_ceiling = 1.01` and `novelty_threshold = 0.0` to disable the gate while you smoke-test the rest of the pipeline. Restore to `0.90` / `0.35` once the corpus has hundreds of diverse rows.
 
 ---
 
@@ -239,7 +281,7 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/kg_extractor.py` |
-| **Type** | AI (Claude 3.5 Haiku) |
+| **Type** | AI (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)) |
 | **Input State** | `arxiv_papers_full_text` (iterated one paper at a time) |
 | **Output State** | `kg_entities`, `kg_edges` |
 | **Utilities** | `backend/utils/kg_utils.py`, `backend/utils/embeddings.py` |
@@ -281,7 +323,7 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/hypothesis_generator.py` |
-| **Type** | AI (Claude 3.7 Sonnet) + deterministic post-step |
+| **Type** | AI (Claude Sonnet 4.6 (`claude-sonnet-4-6`)) + deterministic post-step |
 | **Input State** | `kg_entities`, `kg_edges`, `topic` |
 | **Output State** | `hypothesis`, `incremental_delta`, `hypothesis_embedding`, `novelty_score`, `prior_art_similarity_score`, `novelty_passed` |
 | **Utilities** | `backend/utils/embeddings.py`, `backend/utils/supabase_client.py` |
@@ -301,15 +343,22 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 **Part B — Deterministic Novelty Detection + Prior-Art Screening:**
 
 1. Embed the hypothesis using SBERT → `hypothesis_embedding`.
-2. **Prior-art similarity via Supabase pgvector:** Execute:
-   ```sql
-   SELECT arxiv_id, title, 1 - (embedding <=> :hypothesis_embedding) AS similarity
-   FROM papers
-   ORDER BY embedding <=> :hypothesis_embedding
-   LIMIT 10;
+2. **Prior-art similarity via Supabase pgvector** — call the `match_papers` RPC defined in §1.5 Step 4, passing the current run's arXiv IDs as `exclude_arxiv_ids`:
+
+   ```python
+   current_run_ids = [p["arxiv_id"] for p in state["arxiv_papers_full_text"]]
+   sb.rpc("match_papers", {
+       "query_embedding":   hypothesis_embedding,
+       "match_count":       10,
+       "exclude_arxiv_ids": current_run_ids,
+   }).execute()
    ```
-   The `prior_art_similarity_score` is the **maximum** similarity value from results.
-3. **Relative Neighbor Density (RND):** Average cosine distance from hypothesis to K nearest paper embeddings (from the same pgvector query).
+
+   The `prior_art_similarity_score` is the **maximum** `similarity` value from the returned rows.
+
+   > **Critical — exclude current-run papers.** The hypothesis is grounded in the papers Node 1 just fetched; comparing the hypothesis embedding against those same papers is circular and trips the gate on every successful generation. The `exclude_arxiv_ids` argument removes them from the prior-art pool so the score reflects distance from *historical* corpus only.
+
+3. **Relative Neighbor Density (RND):** Average cosine distance from hypothesis to K nearest paper embeddings (from the same pgvector query, after exclusion).
 4. **Dual gating:**
    - RND >= `novelty_threshold` (0.35) **AND** prior-art similarity < `prior_art_ceiling` (0.90) → `novelty_passed = True`.
    - Otherwise → `novelty_passed = False`, `pipeline_status = "failed_novelty"`.
@@ -350,7 +399,7 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/experiment_designer.py` |
-| **Type** | AI (Claude 3.7 Sonnet) |
+| **Type** | AI (Claude Sonnet 4.6 (`claude-sonnet-4-6`)) |
 | **Input State** | `hypothesis`, `incremental_delta`, `kg_entities`, `kg_edges` |
 | **Output State** | `experiment_spec` (ExperimentSpec TypedDict) |
 | **Scoped View** | `hypothesis`, `incremental_delta`, `kg_entities`, `kg_edges` |
@@ -393,7 +442,7 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/ml_coder.py` |
-| **Type** | AI (Claude 3.7 Sonnet) |
+| **Type** | AI (Claude Sonnet 4.6 (`claude-sonnet-4-6`)) |
 | **Input State** | `experiment_spec`, `hypothesis` (first attempt); adds `python_code`, `execution_logs` on retry |
 | **Output State** | `python_code`, `debug_instrumentation` |
 | **Scoped View** | `experiment_spec` + `hypothesis` only (first attempt); adds `python_code` + `execution_logs` on retry |
@@ -410,7 +459,13 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 
 2. **Active debugging:** Inject strategic `print()` at data loading, tensor shape checks, training loss per epoch, and final metric values. These debug prints are critical for the retry loop — they give the Coder diagnostic signal beyond bare stack traces.
 
-3. **Retry behavior:** On retry, the Coder receives the previous `python_code` + full `execution_logs` (including debug prints). The prompt must demand root-cause analysis before rewriting — not blind regeneration.
+3. **Retry behavior:** On retry, the Coder receives the previous `python_code` + full `execution_logs`. The prompt must demand root-cause analysis before rewriting — not blind regeneration.
+
+   > **Output sanitization required.** When asked for "root-cause analysis", Claude reliably prepends a prose paragraph ("The previous code had…") to the response — even when the prompt says "Return ONLY Python code". The sandbox then tries to parse that prose as Python on line 1 and crashes with `SyntaxError`, exhausting all 3 retries on the same failure mode.
+   >
+   > Two defenses are required:
+   > 1. **Strengthen the retry prompt** — explicitly say "The FIRST CHARACTER of your response must be a valid Python token" and "Do NOT prefix the code with sentences like 'The previous code…'".
+   > 2. **Implement `_extract_python_code(text)`** — a robust extractor that prefers a ```` ```python ... ``` ```` fenced block if present, otherwise scans for the first line starting with a Python token (`import`, `from`, `def`, `class`, `#`, `"""`, `@`, `if __name__`, ALL_CAPS constants, etc.) and discards everything before it. Handles markdown fences, prose preamble, and trailing prose in one pass.
 
 ---
 
@@ -488,10 +543,15 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 
 **What to build:**
 
-1. Analyze the hypothesis + experiment results to enumerate every potential claim the paper could make.
+1. **Enumerate claims from the hypothesis text only.** Split the hypothesis into individual assertive sentences (filter ones < 20 chars). These are the claims the paper actually intends to assert. Do **not** also enumerate per-metric, per-algorithm pseudo-claims by walking `metrics_json` — measurements are *evidence*, not claims, and naïve enumeration of every leaf produces dozens of `"The X achieves Y of Z"` strings that:
+   - Don't contain any KG entity name → fail substring matching → all rated `unsupported`,
+   - Drown the real hypothesis claims (typically 2–4) in noise → trip the No-Paper gate on every successful run.
+
+   The Academic Writer (Node 6) still receives the full `metrics_json` via state and uses it to write the Results section. It just doesn't need claim-ledger entries for each individual measurement.
 2. For each claim, find:
    - **Supporting KG edges:** Same polarity direction.
    - **Contradicting KG edges:** Opposing polarity.
+   Match by checking whether either entity's canonical name (case-insensitive substring) appears in the claim text.
 3. Rate `evidence_strength`:
    - `"strong"`: >= 2 supporting, 0 contradicting.
    - `"moderate"`: 1 supporting, or >= 2 supporting with >= 1 contradicting.
@@ -507,7 +567,7 @@ Build each node as a standalone Python module in `backend/agents/`. Each module 
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/academic_writer.py` |
-| **Type** | AI (Claude 3.7 Sonnet) |
+| **Type** | AI (Claude Sonnet 4.6 (`claude-sonnet-4-6`)) |
 | **Input State** | `claim_ledger`, `experiment_spec`, `metrics_json`, `incremental_delta`, `hypothesis` |
 | **Output State** | `latex_draft`, `bibtex_source` (first pass); updated `latex_draft`, `confidence_score`, `revision_pass_done` (revision pass) |
 | **Scoped View** | `claim_ledger`, `experiment_spec`, `metrics_json`, `incremental_delta`, `hypothesis` |
@@ -573,9 +633,9 @@ Linter warnings bypass the debate protocol — they are objective and non-debata
 
 | Agent | Role | Model | Key Constraint |
 |-------|------|-------|----------------|
-| **A: Fact-Checker** | Verify empirical claims against KG + claim ledger | Claude 3.7 Sonnet | Must use **JSON path traversals** to query `kg_entities`/`kg_edges`/`claim_ledger` — not parametric memory. Must cite specific entity IDs and edge relations. Flag `ungrounded` claims and `contradiction_suppressed` issues. |
-| **B: Methodologist** | Evaluate experimental rigor | Claude 3.5 Haiku | Check if `metrics.json` results logically support conclusions. Verify ExperimentSpec compliance. Flag unsupported claims, missing error bars, statistical issues. |
-| **C: Formatter** | Assess writing quality | Claude 3.5 Haiku (different persona) | Focus on subjective quality: AI-slop writing style, verbosity, argumentation flow, clarity. Structural checks are handled by the linter. |
+| **A: Fact-Checker** | Verify empirical claims against KG + claim ledger | Claude Sonnet 4.6 (`claude-sonnet-4-6`) | Must use **JSON path traversals** to query `kg_entities`/`kg_edges`/`claim_ledger` — not parametric memory. Must cite specific entity IDs and edge relations. Flag `ungrounded` claims and `contradiction_suppressed` issues. |
+| **B: Methodologist** | Evaluate experimental rigor | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) | Check if `metrics.json` results logically support conclusions. Verify ExperimentSpec compliance. Flag unsupported claims, missing error bars, statistical issues. |
+| **C: Formatter** | Assess writing quality | Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) (different persona) | Focus on subjective quality: AI-slop writing style, verbosity, argumentation flow, clarity. Structural checks are handled by the linter. |
 
 **Structured Debate Protocol (4 phases — replaces passive vote aggregation):**
 
@@ -583,6 +643,10 @@ Linter warnings bypass the debate protocol — they are objective and non-debata
 2. **Cross-challenge:** Each agent reads the other two agents' critiques. For each disagreement, issues a formal challenge explaining why the critique is incorrect/excessive.
 3. **Defend-or-retract:** The original critic must defend (with evidence) or retract each challenged critique.
 4. **Resolution:** Only unretracted critiques survive into `surviving_critiques[]`. Retracted ones are logged in `debate_log[]` but not forwarded.
+
+> **Format-string trap.** The CHALLENGE_PROMPT and DEFEND_PROMPT templates use Python `str.format()` for `{critiques}`/`{challenge}` substitution AND contain literal JSON examples like `[{"target_critique_index": 0, ...}]`. Python's formatter sees `{"target_critique_index"}` as a format field with that quoted string as the lookup key → `KeyError: '"target_critique_index"'` at runtime, crashing the whole pipeline mid-debate.
+>
+> **Always escape literal JSON braces inside `.format()` templates as `{{...}}`.** Either review every template by hand or switch entirely to f-strings or `string.Template` to avoid the trap.
 
 ---
 
@@ -612,7 +676,7 @@ Linter warnings bypass the debate protocol — they are objective and non-debata
 | Attribute | Value |
 |-----------|-------|
 | **File** | `backend/agents/latex_compiler.py` |
-| **Type** | Non-AI (pdflatex) + AI (Claude 3.5 Haiku for repair) |
+| **Type** | Non-AI (pdflatex) + AI (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) for repair) |
 | **Input State** | `latex_draft`, `bibtex_source` |
 | **Output State** | `final_pdf_path`, `latex_compile_log`, `latex_repair_attempts`, `pipeline_status` |
 | **Utilities** | `backend/utils/latex_utils.py` |
@@ -650,12 +714,41 @@ Linter warnings bypass the debate protocol — they are objective and non-debata
 **What to build:**
 
 1. At pipeline start: generate `run_id` (UUID), insert a row into `pipeline_runs` with `status = 'running'`.
-2. At pipeline end: upload all available artifacts to `artifacts/{run_id}/` in the Supabase Storage bucket:
-   - Always: `failure_report.json` (on failure) or available artifacts (`metrics.json`, `claim_ledger.json`, etc.)
-   - Only on success: `draft.tex`, `references.bib`, `debate_log.json`, `final_paper.pdf`.
-   - Skip missing files gracefully (e.g., `no_paper` exits before drafting, so no `.tex` exists).
-3. Update the `pipeline_runs` row with: final `status`, `completed_at` timestamp, `artifact_path`.
-4. Populate `artifact_urls` in state with filename-to-URL mappings for frontend consumption.
+2. At pipeline end: upload every available artifact to `artifacts/{run_id}/` in the Supabase Storage bucket. The full inventory:
+
+   | File | Source state field | Always uploaded? |
+   |---|---|---|
+   | `metrics.json`           | `state.metrics_json` (JSON-dumped)   | When experiment ran |
+   | `claim_ledger.json`      | `state.claim_ledger`                 | When ledger built |
+   | `debate_log.json`        | `state.debate_log`                   | When critique panel ran |
+   | `draft.tex`              | `state.latex_draft`                  | When writer ran |
+   | `references.bib`         | `state.bibtex_source`                | When writer ran |
+   | `python_code.py`         | `state.python_code`                  | When coder ran |
+   | `execution_logs.txt`     | `state.execution_logs`               | When sandbox ran |
+   | `hypothesis.txt`         | `state.hypothesis`                   | When hypothesis generated |
+   | `experiment_spec.json`   | `state.experiment_spec` (JSON-dumped)| When spec produced |
+   | `final_paper.pdf`        | binary at `state.final_pdf_path`     | Only on `success` |
+   | `failure_report.json`    | synthesized                          | When status ≠ `success` |
+
+   The diagnostic artifacts (`python_code.py`, `execution_logs.txt`, `hypothesis.txt`, `experiment_spec.json`) are critical: when an exception crashes the graph, the `state` returned from `graph.invoke()` is partial, and these fields are the only way to reconstruct what the pipeline was doing when it died.
+
+   `failure_report.json` schema (when status ≠ `success`):
+   ```json
+   {
+     "status": "...",
+     "run_id": "...",
+     "topic": "...",
+     "retrieval_round": 1,
+     "code_retry_count": 3,
+     "latex_repair_attempts": null,
+     "execution_logs_tail": "...last 4KB of execution_logs...",
+     "logs": [...]
+   }
+   ```
+
+   Skip missing files gracefully (e.g., `no_paper` exits before drafting, so no `.tex` exists).
+3. Update the `pipeline_runs` row with: final `status`, `completed_at` timestamp, `artifact_path`, and `metadata` (token counts).
+4. Populate `artifact_urls` in state with filename-to-storage-path mappings for frontend consumption.
 
 ---
 
@@ -736,7 +829,9 @@ END
 
 1. **Register all 14 nodes as graph nodes** using `graph.add_node("node_name", node_function)`.
 
-2. **Wire scoped state views:** Before each AI-powered node invocation, the orchestrator wraps the call with `build_scoped_view(state, node_name)`. Implement this as a wrapper function or middleware that intercepts the state before it reaches the LLM prompt builder. Non-AI nodes receive the full state.
+2. **Scoped state views — self-pruning convention.** AI nodes only put the fields they're allowed to see (per `NODE_SCOPE_CONFIG`) into their LLM prompt. They still *receive* the full `AutoResearchState` from LangGraph because some agents need fields outside their scoped view for non-LLM orchestration logic — for example, `kg_extractor` reads `kg_entities`/`kg_edges` for incremental merge, and `hypothesis_generator` reads `arxiv_papers_full_text[*].arxiv_id` to populate the prior-art `exclude_arxiv_ids`. The `build_scoped_view()` utility from §2.2 is provided as an enforcement helper for tests and future tightening, but is not currently wired as graph-level middleware.
+
+   > **Why not enforce wrapping?** Wrapping would require splitting every AI agent into two functions (one for full-state orchestration, one for LLM-prompt construction). Cheap to add later if drift becomes a problem; expensive to refactor 7 agents now. Self-pruning is verified by running the test in §5.1 (`test_state_pruning.py`) which asserts each AI prompt contains only allowed fields.
 
 3. **Define edges** — straightforward connections where routing is unconditional:
    - `START` → `arxiv_retriever`

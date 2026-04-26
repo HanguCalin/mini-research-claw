@@ -16,6 +16,7 @@ import anthropic
 from backend.config import MODELS, THRESHOLDS
 from backend.state import KGEdge, KGEntity
 from backend.utils.embeddings import find_synonym_clusters
+from backend.utils.llm_utils import extract_json, extract_text
 
 
 # ─── SBERT-based entity deduplication ────────────────────────────────────────
@@ -75,8 +76,11 @@ def _llm_pick_canonical(
         ),
         messages=[{"role": "user", "content": cluster_json}],
     )
-    result = json.loads(response.content[0].text)
-    winner_id = result["winner_id"]
+    try:
+        result = extract_json(extract_text(response))
+    except ValueError:
+        return cluster[0]
+    winner_id = result.get("winner_id", cluster[0]["id"])
 
     for ent in cluster:
         if ent["id"] == winner_id:
