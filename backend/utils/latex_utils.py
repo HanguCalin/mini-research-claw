@@ -144,3 +144,32 @@ def apply_line_patch(
         if lines[idx].strip() == old_line.strip():
             lines[idx] = new_line + "\n"
     return "".join(lines)
+
+
+_INCLUDEGRAPHICS_RE = re.compile(
+    r"\\includegraphics(?:\[(?P<opts>[^\]]*)\])?\{(?P<path>[^}]+)\}"
+)
+
+
+def neutralize_missing_graphics(tex_source: str, work_dir: Path) -> str:
+    r"""Add ``,draft`` to any ``\includegraphics`` whose target file is absent.
+
+    The Academic Writer often emits placeholder figure paths (e.g.
+    ``figures/foo.pdf``) without producing the file. Without ``draft`` mode,
+    pdflatex throws a hard ``File not found`` error that the LLM repair loop
+    has historically failed to fix, burning all 5 attempts. This deterministic
+    pre-pass renders missing graphics as labeled boxes so the rest of the
+    document compiles, costing zero LLM calls.
+    """
+    def _patch(match: re.Match[str]) -> str:
+        opts = match.group("opts") or ""
+        path = match.group("path")
+        if (work_dir / path).exists():
+            return match.group(0)
+        existing = [tok.strip() for tok in opts.split(",") if tok.strip()]
+        if "draft" in existing:
+            return match.group(0)
+        new_opts = ",".join(existing + ["draft"])
+        return f"\\includegraphics[{new_opts}]{{{path}}}"
+
+    return _INCLUDEGRAPHICS_RE.sub(_patch, tex_source)

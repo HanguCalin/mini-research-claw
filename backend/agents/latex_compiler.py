@@ -21,6 +21,7 @@ from backend.utils.latex_utils import (
     apply_line_patch,
     compile_latex,
     format_error_for_repair,
+    neutralize_missing_graphics,
     parse_log_errors,
 )
 
@@ -52,10 +53,10 @@ def latex_compiler(state: AutoResearchState) -> dict[str, Any]:
         tex_path = work_dir / "draft.tex"
         bib_path = work_dir / "references.bib"
 
-        tex_path.write_text(latex_draft, encoding="utf-8")
         bib_path.write_text(bibtex_source, encoding="utf-8")
 
-        current_source = latex_draft
+        current_source = neutralize_missing_graphics(latex_draft, work_dir)
+        tex_path.write_text(current_source, encoding="utf-8")
 
         for attempt in range(max_attempts):
             success, raw_log = compile_latex(tex_path, work_dir)
