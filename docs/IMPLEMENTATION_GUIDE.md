@@ -686,20 +686,23 @@ Linter warnings bypass the debate protocol — they are objective and non-debata
 1. **Compilation:** Write `latex_draft` to `draft.tex` and `bibtex_source` to `references.bib`. Run `pdflatex --no-shell-escape main.tex` + `bibtex main` via `subprocess.run()`.
    - **Security:** Always use `--no-shell-escape` to prevent malicious code execution from LLM-generated LaTeX.
 
-2. **LaTeX Log Parser** (in `latex_utils.py`): On compilation failure, parse the `.log` file to extract:
+2. **Deterministic missing-graphics pre-pass** (in `latex_utils.py`, function `neutralize_missing_graphics()`): Before the compile loop runs, scan `latex_draft` for every `\includegraphics[opts]{path}`. If the target file does **not** exist in the work directory and the options do not already contain `draft`, rewrite the line to add `,draft` (or `[draft]` if no options were given). pdflatex then renders the figure as a labeled placeholder box instead of failing with `! LaTeX Error: File 'foo.pdf' not found.`. This is a one-shot, regex-driven fix that costs zero LLM calls.
+   - **Why this exists:** the Academic Writer routinely emits placeholder figure paths (e.g. `figures/placeholder_hypervolume.pdf`) without producing the file. The LLM repair loop has historically failed to spot the fix and burned all 5 attempts on this single class of error. Run `neutralize_missing_graphics()` once before the loop to eliminate that failure mode entirely.
+
+3. **LaTeX Log Parser** (in `latex_utils.py`): On compilation failure, parse the `.log` file to extract:
    - Line number of the error.
    - Error type and message.
    - +/-5 lines of surrounding LaTeX context.
    - Do NOT feed the entire manuscript to the repair agent — only the localized error context.
 
-3. **Repair loop:**
+4. **Repair loop:**
    - Send the extracted error context (line number + snippet + error message) to Claude Haiku.
    - The repair agent produces a targeted **line-level patch** (old line → new line).
    - Apply the patch surgically; do not touch untouched sections.
    - Re-invoke `pdflatex`.
    - Loop up to `max_latex_repair_attempts` (default: 5).
    - On success → `final_pdf_path` points to the compiled PDF.
-   - On exhaustion → `pipeline_status = "failed_latex"`, preserve `.tex` source for manual inspection.
+   - On exhaustion → `pipeline_status = "failed_latex"`, preserve `.tex` source for manual inspection. Operators can rescue the run by downloading `draft.tex` and `references.bib` from `artifacts/{run_id}/` in Supabase Storage and recompiling locally; the `papers/` directory in the repo includes one such rescue.
 
 ---
 

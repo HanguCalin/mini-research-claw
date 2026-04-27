@@ -521,11 +521,13 @@ This ensures superficial consensus is broken. The debate log is preserved in `de
                        (failure report)
 ```
 
+- **Deterministic Missing-Graphics Pre-Pass** (`neutralize_missing_graphics()` in `latex_utils.py`): Runs **once before** the compile loop. Regex-walks every `\includegraphics[opts]{path}` in the draft; for any target file absent from the work directory, it adds `,draft` (or `[draft]` when no options are present) so pdflatex renders a labeled placeholder box instead of raising `! LaTeX Error: File 'foo.pdf' not found`. The Academic Writer routinely emits placeholder figure paths it never produces, and the LLM repair loop has historically been unable to fix this single class of error — burning all 5 attempts. This deterministic pre-pass costs zero LLM calls and eliminates that failure mode entirely.
+
 - **LaTeX Log Parser** (deterministic Python): Reads the raw `.log` file produced by `pdflatex`. Extracts: line number, error type, error message, and ±5 lines of surrounding LaTeX context. Does **NOT** feed the entire manuscript back to the LLM — only the localized error context (saves tokens and prevents destabilizing correct sections).
 
 - **LaTeX Repair Agent** (Claude Haiku 4.5 (`claude-haiku-4-5-20251001`)): Receives only the error context (line number + surrounding snippet + compiler error message). Produces a targeted, **line-level patch** (old line → new line). The patch is applied surgically; untouched sections remain stable.
 
-- **Loop:** compile → parse log → repair → compile → ... until success or `max_latex_repair_attempts` (default: 5) is exhausted. If exhausted, pipeline terminates with `failed_latex` status and preserves the `.tex` source for manual inspection.
+- **Loop:** missing-graphics pre-pass → compile → parse log → repair → compile → ... until success or `max_latex_repair_attempts` (default: 5) is exhausted. If exhausted, pipeline terminates with `failed_latex` status and preserves the `.tex` source for manual inspection. Operators can rescue an exhausted run by downloading `draft.tex` and `references.bib` from the run's `artifacts/{run_id}/` Supabase Storage path and recompiling locally; the project's `papers/` directory holds one such manual rescue alongside the pipeline-produced PDFs.
 
 #### Artifact Upload to Supabase Storage (Post-Compilation Step)
 
