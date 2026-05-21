@@ -1,0 +1,45 @@
+# ─── Auto-Mini-Claw — Executor Sandbox Image ─────────────────────────────────
+# This image runs LLM-generated experiment code under strict isolation
+# (--network=none, --read-only, --security-opt=no-new-privileges).
+#
+# Hard rule: **only pre-compiled wheels** are installed. No C compilers,
+# no build-essential, no make. This enforces the constraint from Node 4
+# (Constrained ML Coder): generated code may only use libraries that ship
+# manylinux wheels for the sandbox's Python ABI.
+
+FROM python:3.11-slim
+
+# Block accidental builds from source — keep the image free of toolchains.
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_ONLY_BINARY=:all: \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+# Cache mount points populated by the host-side Dependency Resolver.
+# These will be bind-mounted read-only at runtime (-v .cache/pip:/pip_cache:ro).
+ENV PIP_FIND_LINKS=/pip_cache \
+    HF_DATASETS_CACHE=/hf_cache \
+    HF_HOME=/hf_cache \
+    SCIKIT_LEARN_DATA=/sklearn_cache
+
+# Pre-install the ML toolchain that LLM-generated code is allowed to import.
+# All packages below ship manylinux2014 / manylinux_2_28 wheels for cp311.
+RUN pip install \
+        numpy \
+        scipy \
+        pandas \
+        scikit-learn \
+        matplotlib \
+        seaborn \
+        torch \
+        transformers \
+        datasets \
+        huggingface_hub
+
+# Workdir is the only writable surface besides /tmp at runtime.
+WORKDIR /workspace
+
+# Default entrypoint runs the experiment script the orchestrator drops in.
+# The Executor (Node 5) overrides CMD with the concrete script path.
+CMD ["python", "-u", "main.py"]
