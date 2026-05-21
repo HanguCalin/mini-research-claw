@@ -1,5 +1,17 @@
 import { useState } from "react";
-import { Sparkles, ChevronDown, Zap } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import {
+  BookOpen,
+  ChevronDown,
+  FileText,
+  Gauge,
+  Network,
+  ShieldCheck,
+  Sparkles,
+  Zap,
+} from "lucide-react";
+import { usePipeline } from "../context/usePipeline";
+import { pipelineStages } from "../data/pipelineStages";
 
 const exampleTopics = [
   "Compare Random Forest vs Logistic Regression on the Iris dataset",
@@ -11,6 +23,8 @@ const exampleTopics = [
 export default function NewResearch() {
   const [topic, setTopic] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const navigate = useNavigate();
+  const { startRun } = usePipeline();
   const [config, setConfig] = useState({
     researcherModel: "haiku",
     coderModel: "sonnet",
@@ -19,21 +33,44 @@ export default function NewResearch() {
     maxPapers: 5,
   });
 
+  const launch = () => {
+    if (!topic.trim()) return;
+    startRun(topic);
+    navigate("/");
+  };
+
   return (
-    <div className="max-w-3xl space-y-8 animate-slide-in">
-      {/* Header */}
-      <div>
-        <p className="section-kicker">Launch Pad</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
-          New Research
-        </h1>
-        <p className="mt-2 text-sm leading-7 text-text-secondary">
-          Enter a research topic and the AI agents will handle the rest.
-        </p>
+    <div className="grid gap-6 animate-slide-in xl:grid-cols-[0.95fr_1.05fr]">
+      <div className="space-y-6">
+        <div>
+          <p className="section-kicker">Launch Pad</p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+            New Research
+          </h1>
+          <p className="mt-2 max-w-xl text-sm leading-7 text-text-secondary">
+            Shape the topic, choose constraints, and send the run into a visible
+            generation workflow.
+          </p>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          {[
+            { icon: BookOpen, label: "Paper cache", value: `${config.maxPapers} papers` },
+            { icon: Gauge, label: "Retries", value: `${config.maxRetries} max` },
+            { icon: ShieldCheck, label: "Sandbox", value: "isolated" },
+          ].map(({ icon: Icon, label, value }) => (
+            <div key={label} className="panel-soft rounded-lg p-4">
+              <Icon size={16} className="text-accent" />
+              <p className="mt-3 text-xs text-text-muted">{label}</p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {value}
+              </p>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Topic input */}
-      <div className="panel-soft panel-cyber space-y-4 p-6">
+      <div className="panel-soft space-y-5 rounded-lg p-5 sm:p-6">
         <label className="text-sm font-medium text-text-secondary">
           Research Topic
         </label>
@@ -43,7 +80,7 @@ export default function NewResearch() {
             onChange={(e) => setTopic(e.target.value)}
             placeholder="Describe what you want to research..."
             rows={3}
-            className="w-full rounded-2xl border border-border bg-black/10 px-4 py-4 text-sm text-text-primary placeholder-text-muted resize-none shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
+            className="w-full resize-none rounded-lg border border-border bg-black/15 px-4 py-4 text-sm text-text-primary shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] transition-all placeholder:text-text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30"
           />
           <Sparkles
             size={16}
@@ -56,102 +93,127 @@ export default function NewResearch() {
           {exampleTopics.map((t, i) => (
             <button
               key={i}
-              onClick={() => setTopic(t)}
+            onClick={() => setTopic(t)}
               className="cursor-pointer rounded-full border border-border bg-black/10 px-3 py-2 text-xs text-text-secondary transition-all hover:border-accent/40 hover:text-accent"
             >
               {t.length > 50 ? t.slice(0, 50) + "…" : t}
             </button>
           ))}
         </div>
+
+        <button
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
+        >
+          <ChevronDown
+            size={16}
+            className={`transition-transform ${showAdvanced ? "rotate-180" : ""}`}
+          />
+          Agent Configuration
+        </button>
+
+        {showAdvanced && (
+          <div className="grid gap-4 animate-slide-in sm:grid-cols-2">
+            {[
+              { key: "researcherModel", label: "Researcher Model" },
+              { key: "coderModel", label: "Coder Model" },
+              { key: "writerModel", label: "Writer Model" },
+            ].map(({ key, label }) => (
+              <div key={key} className="space-y-1.5">
+                <label className="text-xs font-medium text-text-muted">
+                  {label}
+                </label>
+                <select
+                  value={config[key]}
+                  onChange={(e) =>
+                    setConfig((c) => ({ ...c, [key]: e.target.value }))
+                  }
+                  className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+                >
+                  <option value="haiku">Claude 3.5 Haiku</option>
+                  <option value="sonnet">Claude 3.7 Sonnet</option>
+                </select>
+              </div>
+            ))}
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-text-muted">
+                Max Retries
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={config.maxRetries}
+                onChange={(e) =>
+                  setConfig((c) => ({
+                    ...c,
+                    maxRetries: parseInt(e.target.value) || 3,
+                  }))
+                }
+                className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-text-muted">
+                Max Papers to Fetch
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={20}
+                value={config.maxPapers}
+                onChange={(e) =>
+                  setConfig((c) => ({
+                    ...c,
+                    maxPapers: parseInt(e.target.value) || 5,
+                  }))
+                }
+                className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+              />
+            </div>
+          </div>
+        )}
+
+        <button
+          onClick={launch}
+          disabled={!topic.trim()}
+          className="action-primary flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg px-6 py-3 text-sm font-semibold text-surface-0 transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40 sm:w-auto"
+        >
+          <Zap size={16} />
+          Launch Pipeline
+        </button>
       </div>
 
-      {/* Advanced config toggle */}
-      <button
-        onClick={() => setShowAdvanced(!showAdvanced)}
-        className="flex cursor-pointer items-center gap-2 text-sm text-text-secondary transition-colors hover:text-text-primary"
-      >
-        <ChevronDown
-          size={16}
-          className={`transition-transform ${showAdvanced ? "rotate-180" : ""}`}
-        />
-        Agent Configuration
-      </button>
-
-      {showAdvanced && (
-        <div className="panel-soft panel-cyber grid gap-4 p-5 animate-slide-in sm:grid-cols-2">
-          {/* Model selectors */}
-          {[
-            { key: "researcherModel", label: "Researcher Model" },
-            { key: "coderModel", label: "Coder Model" },
-            { key: "writerModel", label: "Writer Model" },
-          ].map(({ key, label }) => (
-            <div key={key} className="space-y-1.5">
-              <label className="text-xs font-medium text-text-muted">
-                {label}
-              </label>
-              <select
-                value={config[key]}
-                onChange={(e) =>
-                  setConfig((c) => ({ ...c, [key]: e.target.value }))
-                }
-                className="w-full cursor-pointer appearance-none rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-              >
-                <option value="haiku">Claude 3.5 Haiku</option>
-                <option value="sonnet">Claude 3.7 Sonnet</option>
-              </select>
+      <div className="xl:col-span-2">
+        <div className="panel-soft rounded-lg p-5">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="section-kicker">Generation Preview</p>
+              <h2 className="mt-2 text-xl font-semibold tracking-tight">
+                What the user will see while the paper is generated
+              </h2>
             </div>
-          ))}
-
-          {/* Max retries */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-text-muted">
-              Max Retries
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={5}
-              value={config.maxRetries}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  maxRetries: parseInt(e.target.value) || 3,
-                }))
-              }
-              className="w-full rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-            />
+            <FileText size={22} className="text-accent" />
           </div>
-
-          {/* Max papers */}
-          <div className="space-y-1.5">
-            <label className="text-xs font-medium text-text-muted">
-              Max Papers to Fetch
-            </label>
-            <input
-              type="number"
-              min={1}
-              max={20}
-              value={config.maxPapers}
-              onChange={(e) =>
-                setConfig((c) => ({
-                  ...c,
-                  maxPapers: parseInt(e.target.value) || 5,
-                }))
-              }
-              className="w-full rounded-xl border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-            />
+          <div className="mt-5 grid gap-3 md:grid-cols-4">
+            {pipelineStages.slice(0, 8).map((stage) => (
+              <div key={stage.id} className="rounded-lg border border-border bg-black/10 p-4">
+                <div className="flex items-center gap-2">
+                  <Network size={14} className="text-accent" />
+                  <p className="text-sm font-semibold text-text-primary">
+                    {stage.shortName}
+                  </p>
+                </div>
+                <p className="mt-2 text-xs leading-relaxed text-text-muted">
+                  {stage.insight}
+                </p>
+              </div>
+            ))}
           </div>
         </div>
-      )}
-
-      {/* Submit */}
-      <button
-        disabled={!topic.trim()}
-        className="action-primary flex cursor-pointer items-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold text-surface-0 transition-all hover:-translate-y-0.5 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        <Zap size={16} />
-        Launch Pipeline
-      </button>
+      </div>
     </div>
   );
 }

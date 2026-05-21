@@ -5,7 +5,12 @@ import {
   FileText,
   ArrowRight,
   RotateCcw,
+  BrainCircuit,
+  ClipboardCheck,
+  DatabaseZap,
+  Network,
 } from "lucide-react";
+import { pipelineStages } from "../data/pipelineStages";
 
 const statusStyles = {
   idle: {
@@ -45,51 +50,30 @@ const statusStyles = {
   },
 };
 
-const agents = [
-  {
-    id: "researcher",
-    name: "Researcher",
-    model: "Haiku",
-    icon: Search,
-    description: "Searching arXiv & forming hypothesis",
-  },
-  {
-    id: "coder",
-    name: "Coder",
-    model: "Sonnet",
-    icon: Code,
-    description: "Generating experiment code",
-  },
-  {
-    id: "executor",
-    name: "Executor",
-    model: "Sandbox",
-    icon: Play,
-    description: "Running code in Docker",
-  },
-  {
-    id: "writer",
-    name: "Writer",
-    model: "Sonnet",
-    icon: FileText,
-    description: "Composing research paper",
-  },
-];
+const icons = {
+  retriever: Search,
+  kg: Network,
+  hypothesis: BrainCircuit,
+  design: ClipboardCheck,
+  coder: Code,
+  executor: Play,
+  writer: FileText,
+  compiler: DatabaseZap,
+};
 
 export default function PipelineStepper({ agentStates = {} }) {
   return (
-    <div className="flex min-w-max items-start gap-3">
-      {agents.map((agent, i) => {
+    <div className="flex min-w-max items-stretch gap-3">
+      {pipelineStages.map((agent, i) => {
         const status = agentStates[agent.id] || "idle";
         const s = statusStyles[status];
-        const Icon = agent.icon;
+        const Icon = icons[agent.id] || Search;
         const isRetry = agent.id === "executor" && status === "retrying";
 
         return (
-          <div key={agent.id} className="flex items-start gap-3">
-            {/* Agent Card */}
+          <div key={agent.id} className="flex items-stretch gap-3">
             <div
-              className={`panel-cyber relative flex w-48 flex-col items-center gap-3 border-2 p-5 transition-all duration-300 ${s.ring} ${s.bg}`}
+              className={`relative flex w-44 flex-col gap-3 rounded-lg border p-4 transition-all duration-300 ${s.ring} ${s.bg}`}
               style={
                 status === "running" || status === "retrying"
                   ? {
@@ -102,16 +86,23 @@ export default function PipelineStepper({ agentStates = {} }) {
               }
             >
               <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/30 to-transparent" />
-              <div
-                className={`flex h-12 w-12 items-center justify-center rounded-full border ${s.ring} ${s.bg}`}
-              >
-                {isRetry ? (
-                  <RotateCcw size={20} className={s.text} />
-                ) : (
-                  <Icon size={20} className={s.text} />
-                )}
+              <div className="flex items-center justify-between gap-3">
+                <div
+                  className={`flex h-10 w-10 items-center justify-center rounded-lg border ${s.ring} ${s.bg}`}
+                >
+                  {isRetry ? (
+                    <RotateCcw size={18} className={s.text} />
+                  ) : (
+                    <Icon size={18} className={s.text} />
+                  )}
+                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${s.badge}`}
+                >
+                  {s.label}
+                </span>
               </div>
-              <div className="text-center">
+              <div>
                 <p className="text-sm font-semibold text-text-primary">
                   {agent.name}
                 </p>
@@ -119,19 +110,13 @@ export default function PipelineStepper({ agentStates = {} }) {
                   {agent.model}
                 </p>
               </div>
-              <span
-                className={`text-[10px] font-mono font-medium px-2.5 py-1 rounded-full ${s.badge}`}
-              >
-                {s.label}
-              </span>
-              <p className="text-xs text-text-muted text-center leading-relaxed">
+              <p className="text-xs leading-relaxed text-text-muted">
                 {agent.description}
               </p>
             </div>
 
-            {/* Connector arrow */}
-            {i < agents.length - 1 && (
-              <div className="flex items-center pt-10 text-text-muted">
+            {i < pipelineStages.length - 1 && (
+              <div className="flex items-center text-text-muted">
                 <ArrowRight size={18} />
               </div>
             )}

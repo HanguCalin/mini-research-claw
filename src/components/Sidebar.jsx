@@ -18,8 +18,7 @@ const links = [
 
 export default function Sidebar() {
   return (
-    <aside className="panel-soft panel-cyber mx-4 mt-4 flex h-auto shrink-0 flex-col sm:mx-6 lg:sticky lg:top-4 lg:ml-4 lg:h-[calc(100vh-2rem)] lg:w-72">
-      {/* Brand */}
+    <aside className="panel-soft mx-4 mt-4 flex h-auto shrink-0 flex-col rounded-lg sm:mx-6 lg:sticky lg:top-4 lg:ml-4 lg:h-[calc(100vh-2rem)] lg:w-72">
       <div className="border-b border-border px-5 py-6">
         <div className="flex items-start gap-3">
           <div className="accent-glow mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-dim">
@@ -68,7 +67,6 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
       <div className="border-t border-border px-5 py-4">
         <div className="rounded-xl bg-black/10 px-3 py-3 ring-1 ring-white/5">
           <div className="flex items-center gap-2">
