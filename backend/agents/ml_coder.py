@@ -33,8 +33,9 @@ HARD REQUIREMENTS (violation = sandbox crash):
    pandas, numpy, scipy, datasets, huggingface_hub, matplotlib, seaborn.
    NO other packages.
 4. NO subprocess, os.system(), shutil.which().
-5. ML RIGOR: proper train/test split, random_state=42, cross-validation
-   where applicable.
+5. ML RIGOR: ALWAYS call train_test_split() first to create a held-out test
+   set. Then apply cross-validation (KFold/StratifiedKFold/cross_val_score)
+   on the training set only. Always set random_state=42.
 6. OUTPUT metrics.json: save ALL hyperparameters and evaluation metrics to
    "metrics.json" using json.dump().
 7. ACTIVE DEBUGGING: inject strategic print() statements at:

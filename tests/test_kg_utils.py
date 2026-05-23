@@ -7,19 +7,7 @@ Tests:
 - make_entity_id / make_edge_id generate unique IDs
 """
 
-import sys
 from unittest.mock import MagicMock
-
-# pyarrow crashes on Python 3.14 at C-extension level; mock it and its
-# dependents before any backend import triggers the load chain.
-# The functions under test are pure Python and never touch these libs.
-for _mod in [
-    "pyarrow", "pyarrow.lib", "pyarrow.dataset",
-    "sentence_transformers",
-    "datasets",
-    "backend.utils.embeddings",
-]:
-    sys.modules.setdefault(_mod, MagicMock())
 
 import pytest
 
