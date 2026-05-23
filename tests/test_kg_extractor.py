@@ -14,19 +14,9 @@ llm_utils tests:
 - extract_text raises on empty content
 """
 
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# Block pyarrow / sentence_transformers before any backend import (Python 3.14 crash)
-for _mod in [
-    "pyarrow", "pyarrow.lib", "pyarrow.dataset",
-    "sentence_transformers",
-    "datasets",
-    "backend.utils.embeddings",
-]:
-    sys.modules.setdefault(_mod, MagicMock())
 
 from backend.agents.kg_extractor import _format_paper_for_prompt, kg_extractor
 from backend.utils.llm_utils import extract_json, extract_text

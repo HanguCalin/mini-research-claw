@@ -10,14 +10,7 @@ Tests:
 """
 
 import json
-import sys
 from unittest.mock import MagicMock, patch
-
-for _mod in [
-    "pyarrow", "pyarrow.lib", "pyarrow.dataset",
-    "sentence_transformers", "datasets", "backend.utils.embeddings",
-]:
-    sys.modules.setdefault(_mod, MagicMock())
 
 import pytest
 
