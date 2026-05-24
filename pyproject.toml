@@ -63,7 +63,7 @@ asyncio_mode = "auto"
 exclude = [".venv"]
 
 [tool.ruff.lint]
-ignore = ["F401", "F841"]
+ignore = ["F401", "F841", "E402", "E741"]
 
 [tool.mypy]
 ignore_missing_imports = true
