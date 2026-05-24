@@ -1,0 +1,31 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker sandbox image
+        run: docker build -f Dockerfile.sandbox -t mini-claw-sandbox:${{ github.sha }} .
+
+      - name: Build pip package
+        run: |
+          pip install build
+          python -m build --wheel
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "run-${{ github.sha }}"
+          name: "Release ${{ github.sha }}"
+          files: dist/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
