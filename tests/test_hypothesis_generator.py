@@ -151,3 +151,38 @@ def test_hypothesis_embedding_has_correct_length(mock_cls, mock_embed, mock_nove
     mock_cls.return_value = _make_mock_client()
     result = hypothesis_generator(BASE_STATE)
     assert len(result["hypothesis_embedding"]) == 384
+
+
+# ─── BUG-003 regression tests ─────────────────────────────────────────────────
+
+
+def _make_mock_client_raw_text(raw_text: str):
+    block = MagicMock()
+    block.text = raw_text
+    response = MagicMock()
+    response.content = [block]
+    client = MagicMock()
+    client.messages.create.return_value = response
+    return client
+
+
+@patch("backend.agents.hypothesis_generator._pgvector_novelty_check", return_value=(0.8, 0.2))
+@patch("backend.agents.hypothesis_generator.embed_single", return_value=[0.1] * 384)
+@patch("backend.agents.hypothesis_generator.anthropic.Anthropic")
+def test_malformed_json_does_not_crash(mock_cls, mock_embed, mock_novelty):
+    """BUG-003: hypothesis_generator must not crash when LLM returns invalid JSON."""
+    mock_cls.return_value = _make_mock_client_raw_text("This is not JSON at all.")
+    result = hypothesis_generator(BASE_STATE)
+    assert "hypothesis" in result
+    assert len(result["hypothesis"]) > 0
+
+
+@patch("backend.agents.hypothesis_generator._pgvector_novelty_check", return_value=(0.8, 0.2))
+@patch("backend.agents.hypothesis_generator.embed_single", return_value=[0.1] * 384)
+@patch("backend.agents.hypothesis_generator.anthropic.Anthropic")
+def test_missing_hypothesis_key_does_not_crash(mock_cls, mock_embed, mock_novelty):
+    """BUG-003: hypothesis_generator must not crash when JSON is valid but missing 'hypothesis' key."""
+    mock_cls.return_value = _make_mock_client({"incremental_delta": "some delta"})
+    result = hypothesis_generator(BASE_STATE)
+    assert "hypothesis" in result
+    assert len(result["hypothesis"]) > 0

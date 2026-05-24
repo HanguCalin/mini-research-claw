@@ -64,10 +64,17 @@ def hypothesis_generator(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = extract_json(extract_text(response))
-    hypothesis = raw["hypothesis"]
-    incremental_delta = raw.get("incremental_delta", "")
-    mentioned = raw.get("mentioned_entities", [])
+    text = extract_text(response)
+    try:
+        raw = extract_json(text)
+        hypothesis = raw["hypothesis"]
+        incremental_delta = raw.get("incremental_delta", "")
+        mentioned = raw.get("mentioned_entities", [])
+    except (ValueError, KeyError):
+        logger.warning("hypothesis_generator: JSON parsing failed, using raw response as hypothesis")
+        hypothesis = text.strip()
+        incremental_delta = ""
+        mentioned = []
 
     entity_names = {e["canonical_name"].lower() for e in kg_entities}
     for alias_list in (e.get("aliases", []) for e in kg_entities):
