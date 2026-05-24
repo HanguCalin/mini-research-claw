@@ -6,6 +6,14 @@ export const pipelineStages = [
     model: "arXiv",
     description: "Finding relevant papers and extracting useful sections.",
     insight: "Expanding search terms and filtering papers for usable methods.",
+    detail:
+      "The retriever queries arXiv, normalizes candidate papers, and keeps the useful method, implementation, and result sections for later agents.",
+    outputs: ["paper cache", "section extracts", "retrieval metadata"],
+    paperSection: {
+      title: "Literature Grounding",
+      body: "The run begins by collecting relevant papers and extracting the methods, datasets, and reported results that can support a defensible experiment.",
+    },
+    artifacts: ["paper_cache.json"],
     duration: 4500,
   },
   {
@@ -15,6 +23,14 @@ export const pipelineStages = [
     model: "Haiku",
     description: "Turning paper evidence into entities, claims, and relations.",
     insight: "Deduplicating concepts before hypothesis generation.",
+    detail:
+      "The graph pass converts literature into traceable entities and relationships so later claims can point back to evidence instead of floating freely.",
+    outputs: ["entities", "relations", "evidence graph"],
+    paperSection: {
+      title: "Evidence Graph",
+      body: "Extracted claims are organized into a compact knowledge graph that tracks concepts, model families, datasets, and reported metric relationships.",
+    },
+    artifacts: ["knowledge_graph.json"],
     duration: 4200,
   },
   {
@@ -24,6 +40,14 @@ export const pipelineStages = [
     model: "Sonnet",
     description: "Proposing a testable research claim and checking novelty.",
     insight: "Comparing the candidate claim against cached prior art.",
+    detail:
+      "The hypothesis agent proposes a narrow, testable claim and checks it against nearby prior work before the experiment is designed.",
+    outputs: ["hypothesis", "novelty score", "prior-art matches"],
+    paperSection: {
+      title: "Hypothesis",
+      body: "The paper centers on a focused claim that can be tested with a reproducible experiment rather than a broad survey-style question.",
+    },
+    artifacts: ["hypothesis.json"],
     duration: 4800,
   },
   {
@@ -33,6 +57,14 @@ export const pipelineStages = [
     model: "Sonnet",
     description: "Defining datasets, metrics, controls, and expected outcomes.",
     insight: "Locking the evaluation contract before code is written.",
+    detail:
+      "The experiment designer fixes the independent variable, dependent variables, dataset, metrics, and controls so the coder has a clear contract.",
+    outputs: ["experiment spec", "metrics plan", "controls"],
+    paperSection: {
+      title: "Experimental Design",
+      body: "The experiment defines the comparison setup, evaluation metrics, controls, and expected outcome before any code is generated.",
+    },
+    artifacts: ["experiment_spec.json"],
     duration: 4300,
   },
   {
@@ -42,6 +74,14 @@ export const pipelineStages = [
     model: "Sonnet",
     description: "Generating constrained Python experiment code.",
     insight: "Keeping dependencies compatible with the isolated Docker sandbox.",
+    detail:
+      "The coder writes Python that stays inside the allowed dependency set and includes enough instrumentation for the executor to diagnose failures.",
+    outputs: ["experiment script", "dependency list", "debug hooks"],
+    paperSection: {
+      title: "Implementation",
+      body: "The generated experiment script uses constrained dependencies and emits structured metrics that can be consumed by the paper writer.",
+    },
+    artifacts: ["experiment.py", "requirements.lock"],
     duration: 5200,
   },
   {
@@ -51,6 +91,14 @@ export const pipelineStages = [
     model: "Docker",
     description: "Running the experiment and collecting metrics.",
     insight: "Capturing stdout, metrics, and retry signals from the container.",
+    detail:
+      "The executor runs the generated script in a locked-down Docker sandbox and captures logs, metrics, failures, and retry feedback.",
+    outputs: ["execution logs", "metrics", "retry signals"],
+    paperSection: {
+      title: "Results",
+      body: "The sandbox execution produces structured metrics, model comparisons, and diagnostic logs that become the basis for the results section.",
+    },
+    artifacts: ["metrics.json", "execution.log"],
     duration: 5200,
   },
   {
@@ -60,6 +108,14 @@ export const pipelineStages = [
     model: "Sonnet",
     description: "Building the claim ledger and drafting LaTeX.",
     insight: "Linking claims to supporting graph evidence before writing.",
+    detail:
+      "The writer uses the claim ledger to draft a paper whose major statements are linked to evidence, metrics, or surviving critiques.",
+    outputs: ["claim ledger", "LaTeX draft", "bibliography"],
+    paperSection: {
+      title: "Draft Paper",
+      body: "The writer assembles the abstract, methodology, results, limitations, and conclusion while keeping claims tied to their supporting evidence.",
+    },
+    artifacts: ["claim_ledger.json", "paper.tex", "references.bib"],
     duration: 4800,
   },
   {
@@ -69,6 +125,14 @@ export const pipelineStages = [
     model: "LaTeX",
     description: "Compiling the final paper and uploading artifacts.",
     insight: "Repairing bibliography and formatting errors if compilation fails.",
+    detail:
+      "The compiler turns the LaTeX draft into a PDF and prepares the final bundle of source, metrics, evidence, and compiled paper artifacts.",
+    outputs: ["compiled PDF", "repair log", "artifact bundle"],
+    paperSection: {
+      title: "Final Package",
+      body: "The final output is a paper package containing the compiled PDF, source files, metrics, logs, and evidence artifacts for review.",
+    },
+    artifacts: ["paper.pdf", "artifact_manifest.json"],
     duration: 3600,
   },
 ];

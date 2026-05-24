@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { pipelineStages } from "../data/pipelineStages";
+import { createPipelineRun, getPipelineRun } from "../services/api";
 import { PipelineContext } from "./pipelineContextObject";
 
 const seedLogs = [
@@ -44,6 +45,10 @@ export function PipelineProvider({ children }) {
   const [logs, setLogs] = useState(seedLogs);
   const [startedAt, setStartedAt] = useState(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [backendRunId, setBackendRunId] = useState(null);
+  const [backendStatus, setBackendStatus] = useState("idle");
+  const [backendError, setBackendError] = useState(null);
+  const [backendResult, setBackendResult] = useState(null);
 
   const startRun = (nextTopic) => {
     const trimmed = nextTopic.trim();
@@ -52,6 +57,10 @@ export function PipelineProvider({ children }) {
     setTopic(trimmed);
     setActiveStageIndex(0);
     setIsRunning(true);
+    setBackendRunId(null);
+    setBackendStatus("queued");
+    setBackendError(null);
+    setBackendResult(null);
     const startTime = Date.now();
     setStartedAt(startTime);
     setElapsedSeconds(0);
@@ -65,6 +74,35 @@ export function PipelineProvider({ children }) {
       },
       ...makeStageLog(firstStage, trimmed, 0),
     ]);
+
+    createPipelineRun(trimmed)
+      .then((record) => {
+        setBackendRunId(record.client_run_id);
+        setBackendStatus(record.status);
+        setLogs((current) => [
+          ...current,
+          {
+            time: stamp(),
+            level: "success",
+            agent: "api",
+            msg: `Backend run accepted: ${record.client_run_id}`,
+          },
+        ]);
+      })
+      .catch((error) => {
+        setBackendStatus("failed");
+        setBackendError(error.message);
+        setIsRunning(false);
+        setLogs((current) => [
+          ...current,
+          {
+            time: stamp(),
+            level: "error",
+            agent: "api",
+            msg: `Backend launch failed: ${error.message}`,
+          },
+        ]);
+      });
   };
 
   useEffect(() => {
@@ -85,21 +123,33 @@ export function PipelineProvider({ children }) {
           ...makeStageLog(nextStage, topic, nextIndex),
         ]);
       } else {
-        setIsRunning(false);
-        setLogs((current) => [
-          ...current,
-          {
-            time: stamp(),
-            level: "success",
-            agent: "system",
-            msg: "Paper package prepared: LaTeX source, metrics, claim ledger, and PDF artifact.",
-          },
-        ]);
+        if (!backendRunId || backendStatus === "success" || backendStatus === "failed") {
+          setIsRunning(false);
+          setLogs((current) => [
+            ...current,
+            {
+              time: stamp(),
+              level: "success",
+              agent: "system",
+              msg: "Paper package prepared: LaTeX source, metrics, claim ledger, and PDF artifact.",
+            },
+          ]);
+        } else {
+          setLogs((current) => [
+            ...current,
+            {
+              time: stamp(),
+              level: "info",
+              agent: "api",
+              msg: "Visual walkthrough complete. Waiting for backend pipeline result...",
+            },
+          ]);
+        }
       }
     }, stage.duration);
 
     return () => window.clearTimeout(timer);
-  }, [activeStageIndex, isRunning, topic]);
+  }, [activeStageIndex, backendRunId, backendStatus, isRunning, topic]);
 
   useEffect(() => {
     if (!isRunning || !startedAt) return undefined;
@@ -110,6 +160,62 @@ export function PipelineProvider({ children }) {
 
     return () => window.clearInterval(timer);
   }, [isRunning, startedAt]);
+
+  useEffect(() => {
+    if (!backendRunId || backendStatus === "success" || backendStatus === "failed") {
+      return undefined;
+    }
+
+    const poll = window.setInterval(() => {
+      getPipelineRun(backendRunId)
+        .then((record) => {
+          setBackendStatus(record.status);
+          if (record.result) setBackendResult(record.result);
+
+          if (record.status === "success") {
+            setActiveStageIndex(pipelineStages.length);
+            setIsRunning(false);
+            setLogs((current) => [
+              ...current,
+              {
+                time: stamp(),
+                level: "success",
+                agent: "api",
+                msg: "Backend pipeline completed successfully.",
+              },
+            ]);
+          }
+
+          if (record.status === "failed") {
+            setIsRunning(false);
+            setBackendError(record.error || "Backend pipeline failed.");
+            setLogs((current) => [
+              ...current,
+              {
+                time: stamp(),
+                level: "error",
+                agent: "api",
+                msg: record.error || "Backend pipeline failed.",
+              },
+            ]);
+          }
+        })
+        .catch((error) => {
+          setBackendError(error.message);
+          setLogs((current) => [
+            ...current,
+            {
+              time: stamp(),
+              level: "warn",
+              agent: "api",
+              msg: `Could not refresh backend status: ${error.message}`,
+            },
+          ]);
+        });
+    }, 3000);
+
+    return () => window.clearInterval(poll);
+  }, [backendRunId, backendStatus]);
 
   const stageStates = useMemo(() => {
     return pipelineStages.reduce((states, stage, index) => {
@@ -133,6 +239,10 @@ export function PipelineProvider({ children }) {
     activeStage,
     activeStageIndex,
     elapsedSeconds,
+    backendError,
+    backendResult,
+    backendRunId,
+    backendStatus,
     isRunning,
     logs,
     progress,

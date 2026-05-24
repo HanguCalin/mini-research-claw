@@ -6,6 +6,7 @@ Displays the ExperimentSpec for human review and blocks for approve/reject.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from rich.console import Console
@@ -15,6 +16,14 @@ from rich.table import Table
 from backend.state import AutoResearchState
 
 console = Console()
+
+
+def _auto_approve_enabled() -> bool:
+    return os.getenv("AUTO_MINI_CLAW_AUTO_APPROVE_HITL", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def hitl_experiment_gate(state: AutoResearchState) -> dict[str, Any]:
@@ -61,6 +70,13 @@ def hitl_experiment_gate(state: AutoResearchState) -> dict[str, Any]:
                 edge["polarity"],
             )
         console.print(edge_table)
+
+    if _auto_approve_enabled():
+        console.print("[cyan]AUTO_MINI_CLAW_AUTO_APPROVE_HITL enabled; approving experiment.[/cyan]")
+        return {
+            "hitl_experiment_approved": True,
+            "pipeline_status": "approved_experiment",
+        }
 
     console.print("\n[bold]Enter [green]approve[/green] or [red]reject[/red] (or [red]abort[/red]):[/bold]")
     user_input = input("> ").strip().lower()

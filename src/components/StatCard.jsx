@@ -1,28 +1,29 @@
 export default function StatCard({ icon: Icon, label, value, sub, accent = false }) {
   return (
-    <div className="panel-soft panel-cyber group relative p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-border-bright">
-      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+    <div className="panel-raised group relative overflow-hidden rounded-lg p-5 transition-all duration-200 hover:-translate-y-0.5 hover:border-border-bright">
+      <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent" />
+      <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-accent-dim blur-2xl transition-opacity group-hover:opacity-80" />
       <div className="flex items-start gap-4">
-      <div
-        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl ring-1 ring-white/8 ${
-          accent ? "accent-glow-strong bg-accent-dim" : "bg-surface-2"
-        }`}
-      >
-        <Icon
-          size={18}
-          strokeWidth={1.8}
-          className={accent ? "text-accent" : "text-text-muted"}
-        />
-      </div>
-      <div>
-        <p className="text-3xl font-semibold tracking-tight text-text-primary">
-          {value}
-        </p>
-        <p className="text-xs text-text-secondary mt-0.5">{label}</p>
-        {sub && (
-          <p className="text-[11px] text-text-muted font-mono mt-1">{sub}</p>
-        )}
-      </div>
+        <div
+          className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ring-1 ring-white/8 ${
+            accent ? "accent-glow-strong bg-accent-dim" : "bg-black/20"
+          }`}
+        >
+          <Icon
+            size={18}
+            strokeWidth={1.8}
+            className={accent ? "text-accent" : "text-text-muted"}
+          />
+        </div>
+        <div className="relative">
+          <p className="text-3xl font-semibold tracking-tight text-text-primary">
+            {value}
+          </p>
+          <p className="mt-0.5 text-xs text-text-secondary">{label}</p>
+          {sub && (
+            <p className="mt-1 font-mono text-[11px] text-text-muted">{sub}</p>
+          )}
+        </div>
       </div>
     </div>
   );

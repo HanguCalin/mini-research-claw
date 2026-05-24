@@ -30,7 +30,7 @@
 html {
   min-height: 100%;
   background:
-    linear-gradient(135deg, #080b10 0%, #101923 42%, #172830 74%, #213626 100%);
+    linear-gradient(135deg, #06080d 0%, #0d1720 40%, #142528 72%, #253119 100%);
 }
 
 * {
@@ -43,6 +43,8 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
+    radial-gradient(ellipse at 20% -10%, rgba(97, 216, 255, 0.16), transparent 34%),
+    radial-gradient(ellipse at 92% 12%, rgba(246, 200, 95, 0.11), transparent 28%),
     linear-gradient(145deg, rgba(8, 11, 16, 0.98), rgba(14, 24, 32, 0.96) 56%, rgba(28, 48, 35, 0.9));
   color: var(--color-text-primary);
   font-family: var(--font-sans);
@@ -61,9 +63,10 @@ body::before {
   inset: 0;
   pointer-events: none;
   background-image:
-    linear-gradient(rgba(97, 216, 255, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(73, 230, 167, 0.03) 1px, transparent 1px);
-  background-size: 44px 44px;
+    linear-gradient(rgba(97, 216, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(73, 230, 167, 0.025) 1px, transparent 1px),
+    linear-gradient(135deg, transparent 0 48%, rgba(246, 200, 95, 0.045) 49% 51%, transparent 52%);
+  background-size: 48px 48px, 48px 48px, 220px 220px;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.55), transparent 92%);
   opacity: 0.45;
 }
@@ -87,7 +90,7 @@ body::after {
 
 .panel {
   background:
-    linear-gradient(180deg, rgba(18, 25, 35, 0.92), rgba(8, 11, 16, 0.96));
+    linear-gradient(180deg, rgba(22, 31, 42, 0.94), rgba(8, 11, 16, 0.96));
   border: 1px solid var(--color-border);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.04),
@@ -97,10 +100,109 @@ body::after {
 
 .panel-soft {
   background:
-    linear-gradient(180deg, rgba(18, 25, 35, 0.82), rgba(9, 13, 20, 0.9));
+    linear-gradient(180deg, rgba(21, 30, 40, 0.86), rgba(9, 13, 20, 0.92));
   border: 1px solid var(--color-border);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 14px 38px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(14px);
+}
+
+.panel-raised {
+  background:
+    linear-gradient(180deg, rgba(27, 39, 51, 0.9), rgba(9, 13, 20, 0.96));
+  border: 1px solid rgba(169, 228, 215, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 22px 70px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(18px);
+}
+
+.control-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  background:
+    linear-gradient(115deg, rgba(19, 31, 42, 0.96), rgba(8, 12, 18, 0.98) 52%, rgba(25, 34, 20, 0.96)),
+    linear-gradient(90deg, rgba(97, 216, 255, 0.18), transparent);
+  border: 1px solid rgba(169, 228, 215, 0.2);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 28px 80px rgba(0, 0, 0, 0.36);
+}
+
+.control-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(97, 216, 255, 0.12), transparent 42%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 74px);
+  pointer-events: none;
+}
+
+.control-hero::after {
+  content: "";
+  position: absolute;
+  right: -14%;
+  top: -70%;
+  width: 55%;
+  height: 180%;
+  background:
+    linear-gradient(90deg, transparent, rgba(246, 200, 95, 0.16), transparent),
+    linear-gradient(180deg, transparent, rgba(97, 216, 255, 0.13), transparent);
+  transform: rotate(18deg);
+  pointer-events: none;
+}
+
+.hero-orbit {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 220px;
+}
+
+.hero-orbit::before,
+.hero-orbit::after {
+  content: "";
+  position: absolute;
+  border: 1px solid rgba(169, 228, 215, 0.22);
+  border-radius: 999px;
+}
+
+.hero-orbit::before {
+  width: 190px;
+  height: 190px;
+  animation: slow-spin 18s linear infinite;
+}
+
+.hero-orbit::after {
+  width: 128px;
+  height: 128px;
+  border-color: rgba(246, 200, 95, 0.24);
+  animation: slow-spin 12s linear infinite reverse;
+}
+
+.hero-core {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 86px;
+  height: 86px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle, rgba(97, 216, 255, 0.34), rgba(73, 230, 167, 0.16) 48%, rgba(8, 11, 16, 0.9) 70%);
+  border: 1px solid rgba(169, 228, 215, 0.36);
+  box-shadow:
+    0 0 46px rgba(97, 216, 255, 0.22),
+    inset 0 0 24px rgba(73, 230, 167, 0.18);
+}
+
+.data-chip {
+  border: 1px solid rgba(151, 172, 197, 0.18);
+  background: rgba(0, 0, 0, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .mesh-bg {
@@ -195,8 +297,37 @@ body::after {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes timeline-scan {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(170%); }
+}
+
+@keyframes dock-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes slow-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .animate-slide-in {
   animation: slide-in 0.35s ease-out both;
+}
+
+.animate-timeline-scan {
+  animation: timeline-scan 1.35s ease-in-out infinite;
+}
+
+.animate-dock-in {
+  animation: dock-in 0.35s ease-out both;
 }
 
 .glow-active {

@@ -8,6 +8,7 @@ metrics.json → destroy. All containers run with --network=none,
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,26 @@ from backend.config import SANDBOX, CACHE_ROOT
 
 def get_docker_client() -> docker.DockerClient:
     return docker.from_env()
+
+
+def _host_path(path: Path) -> str:
+    """Return a Docker-daemon-visible path for bind mounts.
+
+    When the backend runs directly on the host, container paths and daemon paths
+    are identical. When it runs inside docker compose, PROJECT_ROOT is mounted at
+    /app, while the sibling sandbox containers are created by the host daemon.
+    HOST_PROJECT_ROOT lets us translate /app/... back to the host checkout path.
+    """
+    host_project_root = os.getenv("HOST_PROJECT_ROOT")
+    if not host_project_root:
+        return str(path)
+
+    try:
+        relative = path.resolve().relative_to(CACHE_ROOT.parent.resolve())
+    except ValueError:
+        return str(path)
+
+    return str(Path(host_project_root) / relative)
 
 
 def run_sandboxed(
@@ -42,21 +63,28 @@ def run_sandboxed(
             "Run: docker build -f Dockerfile.sandbox -t auto-mini-claw-sandbox:latest ."
         )
 
-    with tempfile.TemporaryDirectory(prefix="miniclaw_") as workdir:
-        script_path = Path(workdir) / "main.py"
+    runtime_root = CACHE_ROOT.parent / ".runtime" / "sandbox"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    (CACHE_ROOT / "pip").mkdir(parents=True, exist_ok=True)
+    (CACHE_ROOT / "hf").mkdir(parents=True, exist_ok=True)
+    (CACHE_ROOT / "sklearn").mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="miniclaw_", dir=runtime_root) as workdir:
+        workdir_path = Path(workdir)
+        script_path = workdir_path / "main.py"
         script_path.write_text(python_code, encoding="utf-8")
 
-        metrics_path = Path(workdir) / "metrics.json"
+        metrics_path = workdir_path / "metrics.json"
 
         pip_cache = str(CACHE_ROOT / "pip")
         hf_cache = str(CACHE_ROOT / "hf")
         sklearn_cache = str(CACHE_ROOT / "sklearn")
 
         volumes = {
-            workdir: {"bind": SANDBOX.workdir, "mode": "rw"},
-            pip_cache: {"bind": SANDBOX.pip_mount, "mode": "ro"},
-            hf_cache: {"bind": SANDBOX.hf_mount, "mode": "ro"},
-            sklearn_cache: {"bind": SANDBOX.sklearn_mount, "mode": "ro"},
+            _host_path(workdir_path): {"bind": SANDBOX.workdir, "mode": "rw"},
+            _host_path(Path(pip_cache)): {"bind": SANDBOX.pip_mount, "mode": "ro"},
+            _host_path(Path(hf_cache)): {"bind": SANDBOX.hf_mount, "mode": "ro"},
+            _host_path(Path(sklearn_cache)): {"bind": SANDBOX.sklearn_mount, "mode": "ro"},
         }
 
         environment = {

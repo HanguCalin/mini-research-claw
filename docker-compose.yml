@@ -1,6 +1,26 @@
 services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY:-}
+      HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
+      AUTO_MINI_CLAW_AUTO_APPROVE_HITL: "true"
+      HOST_PROJECT_ROOT: ${PWD}
+    volumes:
+      - .:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
   ui:
     build: .
+    depends_on:
+      - backend
     ports:
       - "3000:80"
     restart: unless-stopped
