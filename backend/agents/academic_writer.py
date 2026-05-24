@@ -104,11 +104,20 @@ def _first_pass(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = extract_json(extract_text(response))
+    text = extract_text(response)
+    try:
+        raw = extract_json(text)
+        latex = raw["latex_draft"]
+        bibtex = raw.get("bibtex_source", "")
+    except (ValueError, KeyError):
+        # LLM returned raw LaTeX instead of the JSON envelope — use it directly.
+        logger.warning("academic_writer: JSON parsing failed, using raw response as LaTeX draft")
+        latex = text.strip()
+        bibtex = ""
 
     return {
-        "latex_draft": raw["latex_draft"],
-        "bibtex_source": raw.get("bibtex_source", ""),
+        "latex_draft": latex,
+        "bibtex_source": bibtex,
         "revision_pass_done": False,
     }
 
@@ -136,10 +145,18 @@ def _revision_pass(state: AutoResearchState) -> dict[str, Any]:
         messages=[{"role": "user", "content": user_prompt}],
     )
 
-    raw = extract_json(extract_text(response))
+    text = extract_text(response)
+    try:
+        raw = extract_json(text)
+        latex = raw["latex_draft"]
+        confidence = float(raw.get("confidence_score", 5.0))
+    except (ValueError, KeyError):
+        logger.warning("academic_writer: JSON parsing failed in revision pass, using raw response as LaTeX draft")
+        latex = text.strip()
+        confidence = 5.0
 
     return {
-        "latex_draft": raw["latex_draft"],
-        "confidence_score": float(raw.get("confidence_score", 5.0)),
+        "latex_draft": latex,
+        "confidence_score": confidence,
         "revision_pass_done": True,
     }

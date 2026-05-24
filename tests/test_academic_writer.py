@@ -141,3 +141,51 @@ def test_revision_includes_critiques_in_prompt(mock_cls):
     academic_writer(state)
     user_content = mock_client.messages.create.call_args.kwargs["messages"][0]["content"]
     assert "Missing methods section" in user_content
+
+
+# ─── BUG-002 regression tests ─────────────────────────────────────────────────
+
+
+def _make_mock_client_raw_text(raw_text: str):
+    """Mock client that returns raw text instead of JSON-wrapped LaTeX."""
+    block = MagicMock()
+    block.text = raw_text
+    response = MagicMock()
+    response.content = [block]
+    client = MagicMock()
+    client.messages.create.return_value = response
+    return client
+
+
+RAW_LATEX = (
+    r"\documentclass{article}\begin{document}"
+    r"\section{Introduction}Raw LaTeX without JSON wrapper."
+    r"\end{document}"
+)
+
+
+@patch("backend.agents.academic_writer.anthropic.Anthropic")
+def test_first_pass_fallback_on_raw_latex_response(mock_cls):
+    """BUG-002: first pass must not crash when LLM returns raw LaTeX (no JSON wrapper)."""
+    mock_cls.return_value = _make_mock_client_raw_text(RAW_LATEX)
+    result = academic_writer(BASE_STATE)
+    assert "latex_draft" in result
+    assert len(result["latex_draft"]) > 0
+    assert result["revision_pass_done"] is False
+
+
+@patch("backend.agents.academic_writer.anthropic.Anthropic")
+def test_revision_pass_fallback_on_raw_latex_response(mock_cls):
+    """BUG-002: revision pass must not crash when LLM returns raw LaTeX (no JSON wrapper)."""
+    mock_cls.return_value = _make_mock_client_raw_text(RAW_LATEX)
+    state = {
+        **BASE_STATE,
+        "revision_pass_done": True,
+        "latex_draft": RAW_LATEX,
+        "critique_warnings": [],
+        "surviving_critiques": [],
+    }
+    result = academic_writer(state)
+    assert "latex_draft" in result
+    assert result["revision_pass_done"] is True
+    assert result["confidence_score"] == 5.0
