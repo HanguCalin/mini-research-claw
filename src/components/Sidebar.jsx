@@ -18,11 +18,10 @@ const links = [
 
 export default function Sidebar() {
   return (
-    <aside className="panel-soft panel-cyber mx-4 mt-4 flex h-auto shrink-0 flex-col sm:mx-6 lg:sticky lg:top-4 lg:ml-4 lg:h-[calc(100vh-2rem)] lg:w-72">
-      {/* Brand */}
+    <aside className="panel-raised mx-4 mt-4 flex h-auto shrink-0 flex-col overflow-hidden rounded-lg sm:mx-6 lg:sticky lg:top-4 lg:ml-4 lg:h-[calc(100vh-2rem)] lg:w-72">
       <div className="border-b border-border px-5 py-6">
         <div className="flex items-start gap-3">
-          <div className="accent-glow mt-0.5 flex h-10 w-10 items-center justify-center rounded-xl bg-accent-dim">
+          <div className="accent-glow mt-0.5 flex h-11 w-11 items-center justify-center rounded-lg border border-border-bright bg-accent-dim">
             <Zap size={18} className="text-accent" />
           </div>
           <div className="flex-1">
@@ -52,7 +51,7 @@ export default function Sidebar() {
               }`
             }
           >
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/10 ring-1 ring-white/5 transition-all duration-200 group-hover:ring-white/10">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-black/20 ring-1 ring-white/5 transition-all duration-200 group-hover:bg-accent-dim group-hover:text-accent group-hover:ring-white/10">
               <Icon size={18} strokeWidth={1.8} />
             </div>
             <div className="flex-1">
@@ -68,9 +67,8 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Footer */}
       <div className="border-t border-border px-5 py-4">
-        <div className="rounded-xl bg-black/10 px-3 py-3 ring-1 ring-white/5">
+        <div className="data-chip rounded-lg px-3 py-3">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-success animate-pulse" />
             <span className="text-xs font-mono text-text-muted">

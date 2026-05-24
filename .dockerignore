@@ -2,4 +2,7 @@ node_modules
 dist
 .git
 .gitignore
+.env
+.cache
+.runtime
 *.md

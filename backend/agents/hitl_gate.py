@@ -7,6 +7,7 @@ for operator approve/reject.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from rich.console import Console
@@ -18,6 +19,14 @@ from backend.config import THRESHOLDS
 from backend.state import AutoResearchState
 
 console = Console()
+
+
+def _auto_approve_enabled() -> bool:
+    return os.getenv("AUTO_MINI_CLAW_AUTO_APPROVE_HITL", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 
 def hitl_gate(state: AutoResearchState) -> dict[str, Any]:
@@ -99,6 +108,13 @@ def hitl_gate(state: AutoResearchState) -> dict[str, Any]:
         if len(papers) > 8:
             paper_table.add_row("...", f"({len(papers) - 8} more)")
         console.print(paper_table)
+
+    if _auto_approve_enabled():
+        console.print("[cyan]AUTO_MINI_CLAW_AUTO_APPROVE_HITL enabled; approving hypothesis.[/cyan]")
+        return {
+            "hitl_approved": True,
+            "pipeline_status": "approved_hypothesis",
+        }
 
     console.print("\n[bold]Enter [green]approve[/green] or [red]reject <reason>[/red]:[/bold]")
     user_input = input("> ").strip()

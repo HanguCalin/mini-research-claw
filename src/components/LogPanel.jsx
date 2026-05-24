@@ -24,21 +24,19 @@ const levelColors = {
 
 export default function LogPanel({ logs = sampleLogs, maxHeight = "400px" }) {
   return (
-    <div className="panel-soft panel-cyber overflow-hidden">
-      {/* Header */}
+    <div className="panel-soft overflow-hidden rounded-lg">
       <div className="flex items-center gap-2 border-b border-border bg-black/10 px-4 py-3">
         <Terminal size={14} className="text-text-muted" />
         <span className="text-xs font-mono text-text-muted">
           pipeline output
         </span>
         <div className="ml-auto flex gap-1.5">
-          <div className="w-2.5 h-2.5 rounded-full bg-error/60" />
-          <div className="w-2.5 h-2.5 rounded-full bg-warning/60" />
-          <div className="w-2.5 h-2.5 rounded-full bg-success/60" />
+          <div className="h-2.5 w-2.5 rounded-full bg-error/60" />
+          <div className="h-2.5 w-2.5 rounded-full bg-warning/60" />
+          <div className="h-2.5 w-2.5 rounded-full bg-success/60" />
         </div>
       </div>
 
-      {/* Log content */}
       <div
         className="overflow-y-auto bg-[linear-gradient(180deg,rgba(4,11,20,0.18),transparent)] p-4 font-mono text-xs leading-relaxed"
         style={{ maxHeight }}
@@ -50,7 +48,7 @@ export default function LogPanel({ logs = sampleLogs, maxHeight = "400px" }) {
             style={{ animationDelay: `${i * 40}ms` }}
           >
             <span className="text-text-muted shrink-0">{log.time}</span>
-            <span className="text-accent shrink-0 w-24 text-right">
+            <span className="w-24 shrink-0 text-right text-accent">
               [{log.agent}]
             </span>
             <span className={levelColors[log.level] || "text-text-secondary"}>
