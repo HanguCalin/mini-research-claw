@@ -7,7 +7,7 @@ name = "auto-mini-claw"
 version = "0.1.0"
 description = "Autonomous AI research pipeline (LangGraph + multi-agent + Supabase)"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 authors = [{ name = "Ungureanu Sergiu-Stefan" }]
 license = { text = "MIT" }
 

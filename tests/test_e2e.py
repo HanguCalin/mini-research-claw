@@ -598,6 +598,68 @@ def test_revision_pass_done_skips_critique_routes_to_latex():
         assert final_state["final_pdf_path"] == "/tmp/paper.pdf"
 
 
+def test_revision_pass_includes_confidence_score_and_neurips_checklist():
+    """Revised draft carries a confidence score (1-10) and NeurIPS reproducibility checklist."""
+    with patch("backend.graph.arxiv_retriever") as m_arxiv, \
+         patch("backend.graph.kg_extractor") as m_kg, \
+         patch("backend.graph.hypothesis_generator") as m_hypo, \
+         patch("backend.graph.hitl_gate") as m_hitl, \
+         patch("backend.graph.experiment_designer") as m_designer, \
+         patch("backend.graph.hitl_experiment_gate") as m_hitl_exp, \
+         patch("backend.graph.ml_coder") as m_coder, \
+         patch("backend.graph.dependency_resolver") as m_dep, \
+         patch("backend.graph.executor") as m_exec, \
+         patch("backend.graph.claim_ledger_builder") as m_ledger, \
+         patch("backend.graph.academic_writer") as m_writer, \
+         patch("backend.graph.deterministic_linter") as m_lint, \
+         patch("backend.graph.critique_panel") as m_panel, \
+         patch("backend.graph.critique_aggregator") as m_agg, \
+         patch("backend.graph.latex_compiler") as m_latex:
+
+        m = dict(arxiv=m_arxiv, kg=m_kg, hypo=m_hypo, hitl=m_hitl, designer=m_designer,
+                 hitl_exp=m_hitl_exp, coder=m_coder, dep=m_dep, exec=m_exec, ledger=m_ledger,
+                 writer=m_writer, lint=m_lint, panel=m_panel, agg=m_agg, latex=m_latex)
+        _setup_happy_path(m)
+
+        state = dict(_BASE_STATE)
+        state["retrieval_round"] = 1
+
+        REVISED_DRAFT = (
+            r"\section{Introduction} Improved intro. "
+            r"\section{Methods} 5-fold CV, random\_state=42. "
+            r"\section{Results} Accuracy: 0.93. "
+            r"\section{Conclusion} RF outperforms XGBoost. "
+            r"\section{NeurIPS Reproducibility Checklist} "
+            r"All code released. Seeds fixed. "
+            r"Confidence Score: 8/10"
+        )
+
+        # Override second writer call to return confidence score + checklist
+        m_writer.side_effect = [
+            {"latex_draft": r"\section{Introduction} First draft.", "revision_pass_done": False},
+            {
+                "latex_draft": REVISED_DRAFT,
+                "revision_pass_done": True,
+                "confidence_score": 8.0,
+            },
+        ]
+
+        graph = get_graph()
+        final_state = graph.invoke(state)
+
+        assert final_state.get("confidence_score") == 8.0, (
+            "Revised draft must carry a numeric confidence score (1-10)"
+        )
+        revised_latex = final_state.get("latex_draft", "")
+        assert "Confidence Score" in revised_latex, (
+            "Revised draft must contain a self-assessed confidence score"
+        )
+        assert "Reproducibility Checklist" in revised_latex, (
+            "Revised draft must contain the NeurIPS reproducibility checklist section"
+        )
+        assert m_writer.call_count == 2, "Writer must be invoked twice (draft + revision)"
+
+
 # ─── §7.2 Node-level Integration Tests ───────────────────────────────────────
 
 
@@ -728,3 +790,385 @@ def test_conditional_claims_context_condition_affects_ledger():
     assert STRENGTH_ORDER[strength_unconditional] >= STRENGTH_ORDER[strength_conditional], (
         "Unconditional supporting evidence must rate at least as strongly as conditional evidence"
     )
+
+
+# ─── §7.2 Supabase + Deep Pipeline Integration Tests ─────────────────────────
+
+
+def test_supabase_cache_first_pipeline_integration():
+    """Cache-first: paper already in Supabase is returned without a DB insert."""
+    from backend.agents.arxiv_retriever import _cache_first_fetch
+
+    fake_result = MagicMock()
+    fake_result.entry_id = "http://arxiv.org/abs/2401.99999v1"
+    fake_result.title = "Cached Title"
+    fake_result.authors = []
+    fake_result.published = MagicMock(year=2024)
+    fake_result.summary = "A previously cached paper abstract"
+
+    cached_row = {
+        "arxiv_id": "2401.99999",
+        "title": "Cached Title",
+        "authors": ["A. Author"],
+        "year": 2024,
+        "abstract": "A previously cached paper abstract",
+        "full_text": {"methodology": "m", "implementation": "i", "results": "r"},
+        "embedding": [0.1] * 384,
+    }
+
+    with patch("backend.agents.arxiv_retriever.get_supabase") as mock_sb, \
+         patch("backend.agents.arxiv_retriever.embed_single", return_value=[0.1] * 384):
+
+        sb_instance = MagicMock()
+        mock_sb.return_value = sb_instance
+        # Simulate cache hit: DB returns the cached row
+        sb_instance.table.return_value.select.return_value.eq.return_value \
+            .limit.return_value.execute.return_value.data = [cached_row]
+
+        result = _cache_first_fetch(fake_result, "2401.99999")
+
+        insert_call_count = sb_instance.table.return_value.insert.call_count
+
+    assert result is not None, "Cache hit must return the paper"
+    assert result["arxiv_id"] == "2401.99999"
+    assert result["title"] == "Cached Title"
+    assert insert_call_count == 0, (
+        "Cache hit must NOT trigger a DB insert — paper already in database"
+    )
+
+
+def test_supabase_cache_miss_fetches_and_inserts():
+    """Cache miss: paper absent from DB is fetched, embedded, and inserted."""
+    from backend.agents.arxiv_retriever import _cache_first_fetch
+
+    fake_result = MagicMock()
+    fake_result.entry_id = "http://arxiv.org/abs/2501.11111v1"
+    fake_result.title = "Brand New Paper"
+    fake_result.authors = [MagicMock(name="B. Researcher")]
+    fake_result.published = MagicMock(year=2025)
+    fake_result.summary = "A fresh abstract"
+
+    with patch("backend.agents.arxiv_retriever.get_supabase") as mock_sb, \
+         patch("backend.agents.arxiv_retriever.embed_single", return_value=[0.7] * 384):
+
+        sb_instance = MagicMock()
+        mock_sb.return_value = sb_instance
+        # Cache miss: no data in DB
+        sb_instance.table.return_value.select.return_value.eq.return_value \
+            .limit.return_value.execute.return_value.data = []
+
+        result = _cache_first_fetch(fake_result, "2501.11111")
+
+        assert sb_instance.table.return_value.insert.called, (
+            "Cache miss must trigger a DB insert"
+        )
+        insert_payload = sb_instance.table.return_value.insert.call_args[0][0]
+
+    assert result is not None
+    assert result["arxiv_id"] == "2501.11111"
+    assert insert_payload["arxiv_id"] == "2501.11111"
+    assert insert_payload["embedding"] == [0.7] * 384, (
+        "SBERT embedding must be persisted alongside the paper"
+    )
+
+
+def test_supabase_artifact_roundtrip_pipeline_integration():
+    """upload_artifacts + finalize_run: all artifacts uploaded, pipeline_runs updated."""
+    from backend.utils.artifact_uploader import upload_artifacts, finalize_run
+
+    run_id = "roundtrip-integration-test-id"
+    pipeline_state = {
+        "run_id": run_id,
+        "topic": "RF vs XGBoost on tabular data",
+        "pipeline_status": "success",
+        "hypothesis": "Random Forest outperforms XGBoost on small datasets.",
+        "latex_draft": r"\documentclass{article}\begin{document}Test\end{document}",
+        "bibtex_source": "@article{ref1, author={A}, title={B}, year={2024}}",
+        "metrics_json": {"accuracy": 0.93, "f1": 0.91},
+        "claim_ledger": [
+            {"claim_id": "c1", "claim_text": "RF wins.", "evidence_strength": "strong"}
+        ],
+        "debate_log": [{"round": 1, "challenger_role": "methodologist", "challenge": "x"}],
+        "python_code": "import sklearn\nprint('done')",
+        "execution_logs": "Training complete. acc=0.93",
+        "experiment_spec": {"dataset_id": "iris", "evaluation_metrics": ["accuracy"]},
+        "final_pdf_path": None,
+        "total_api_calls": 42,
+        "total_tokens_used": 15000,
+    }
+
+    with patch("backend.utils.artifact_uploader.get_supabase") as mock_sb:
+        sb_instance = MagicMock()
+        sb_instance.storage.from_.return_value.upload.return_value = MagicMock()
+        sb_instance.table.return_value.update.return_value.eq.return_value \
+            .execute.return_value = MagicMock()
+        mock_sb.return_value = sb_instance
+
+        urls = upload_artifacts(pipeline_state)
+        finalize_run(pipeline_state)
+
+        update_call = sb_instance.table.return_value.update.call_args[0][0]
+
+    # All expected artifacts must be uploaded
+    assert "draft.tex" in urls, "LaTeX source must be in uploaded artifacts"
+    assert "metrics.json" in urls, "Metrics JSON must be in uploaded artifacts"
+    assert "claim_ledger.json" in urls, "Claim ledger must be in uploaded artifacts"
+    assert "debate_log.json" in urls, "Debate log must be in uploaded artifacts"
+    assert "references.bib" in urls, "BibTeX file must be in uploaded artifacts"
+    # Successful runs must NOT produce a failure report
+    assert "failure_report.json" not in urls
+
+    # All paths must carry the run_id prefix
+    for path in urls.values():
+        assert path.startswith(f"{run_id}/"), (
+            f"Artifact path {path!r} must be namespaced under run_id"
+        )
+
+    # pipeline_runs row must be updated with correct status and artifact path
+    assert update_call["status"] == "success"
+    assert update_call["artifact_path"] == f"artifacts/{run_id}/"
+    assert "completed_at" in update_call
+
+
+def test_iterative_retrieval_deduplicates_by_arxiv_id():
+    """arxiv_retriever: papers whose IDs are already in state are skipped, not re-added."""
+    from backend.agents.arxiv_retriever import arxiv_retriever
+
+    existing_paper = {
+        "arxiv_id": "2401.00001",
+        "title": "Already Retrieved Paper",
+        "authors": [],
+        "year": 2024,
+        "abstract": "We already have this.",
+        "full_text": {"methodology": "m", "implementation": "i", "results": "r"},
+    }
+
+    state = {
+        "topic": "machine learning",
+        "retrieval_round": 1,
+        "hypothesis": "Random Forest outperforms XGBoost",
+        "kg_entities": [],
+        "kg_edges": [],
+        "arxiv_papers_full_text": [existing_paper],
+    }
+
+    # arXiv returns the duplicate + one genuinely new paper
+    duplicate_result = MagicMock()
+    duplicate_result.entry_id = "http://arxiv.org/abs/2401.00001v1"
+
+    new_result = MagicMock()
+    new_result.entry_id = "http://arxiv.org/abs/2401.00002v1"
+
+    new_paper_data = {
+        "arxiv_id": "2401.00002",
+        "title": "Newly Discovered Paper",
+        "authors": [],
+        "year": 2024,
+        "abstract": "A new finding.",
+        "full_text": {"methodology": "m2", "implementation": "i2", "results": "r2"},
+    }
+
+    with patch("backend.agents.arxiv_retriever.arxiv.Client") as mock_client_cls, \
+         patch("backend.agents.arxiv_retriever._cache_first_fetch",
+               return_value=new_paper_data) as mock_fetch, \
+         patch("backend.agents.arxiv_retriever._build_refined_query",
+               return_value="random forest xgboost"), \
+         patch("backend.agents.arxiv_retriever.time.sleep"):
+
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.results.return_value = iter([duplicate_result, new_result])
+
+        output = arxiv_retriever(state)
+
+    final_papers = output.get("arxiv_papers_full_text", [])
+    paper_ids = [p["arxiv_id"] for p in final_papers]
+
+    assert paper_ids.count("2401.00001") == 1, (
+        "Duplicate arXiv ID must not be added a second time"
+    )
+    assert "2401.00002" in paper_ids, "New paper must be appended to the state"
+    assert mock_fetch.call_count == 1, (
+        "_cache_first_fetch must be called only for non-duplicate papers"
+    )
+
+
+def test_conditional_claims_pipeline_claim_ledger_integration():
+    """claim_ledger_builder: conditional supporting edge yields weaker rating than unconditional."""
+    from backend.agents.claim_ledger_builder import claim_ledger_builder
+
+    ENTITIES = [
+        {"id": "e1", "canonical_name": "Random Forest",
+         "entity_type": "model", "aliases": [], "attributes": {}},
+        {"id": "e2", "canonical_name": "XGBoost",
+         "entity_type": "model", "aliases": [], "attributes": {}},
+    ]
+
+    # Scenario A: only a conditional supporting edge
+    state_conditional = {
+        "hypothesis": "Random Forest outperforms XGBoost on tabular data",
+        "metrics_json": {},
+        "kg_entities": ENTITIES,
+        "kg_edges": [
+            {
+                "source_id": "e1", "target_id": "e2",
+                "relation": "outperforms", "polarity": "supports",
+                "context_condition": "only when dataset size < 1000 samples",
+                "confidence": 0.9, "provenance": "paper_A/results",
+            }
+        ],
+    }
+
+    # Scenario B: same edge but unconditional
+    state_unconditional = {
+        "hypothesis": "Random Forest outperforms XGBoost on tabular data",
+        "metrics_json": {},
+        "kg_entities": ENTITIES,
+        "kg_edges": [
+            {
+                "source_id": "e1", "target_id": "e2",
+                "relation": "outperforms", "polarity": "supports",
+                "context_condition": "",  # unconditional claim
+                "confidence": 0.9, "provenance": "paper_B/results",
+            }
+        ],
+    }
+
+    output_cond = claim_ledger_builder(state_conditional)
+    output_uncond = claim_ledger_builder(state_unconditional)
+
+    ledger_cond = output_cond.get("claim_ledger", [])
+    ledger_uncond = output_uncond.get("claim_ledger", [])
+
+    STRENGTH_ORDER = {"strong": 3, "moderate": 2, "weak": 1, "unsupported": 0}
+
+    assert len(ledger_cond) >= 1, "Conditional ledger must have at least one entry"
+    assert len(ledger_uncond) >= 1, "Unconditional ledger must have at least one entry"
+
+    cond_strength = ledger_cond[0]["evidence_strength"]
+    uncond_strength = ledger_uncond[0]["evidence_strength"]
+
+    assert STRENGTH_ORDER[uncond_strength] >= STRENGTH_ORDER[cond_strength], (
+        f"Unconditional evidence ({uncond_strength!r}) must be rated at least as strong "
+        f"as conditional evidence ({cond_strength!r}) for the same claim"
+    )
+
+
+def test_ast_fragility_dependency_resolver_pipeline_integration():
+    """dependency_resolver: dynamic imports don't crash resolution; static imports captured."""
+    from backend.agents.dependency_resolver import dependency_resolver
+
+    code_with_mixed_imports = """\
+import importlib
+mod = importlib.import_module("sklearn.ensemble")
+exec("import numpy as np")
+__import__("scipy")
+import pandas as pd
+from torch import nn
+from datasets import load_dataset
+"""
+
+    state = {"python_code": code_with_mixed_imports}
+
+    with patch("backend.agents.dependency_resolver._prefetch_pip"), \
+         patch("backend.agents.dependency_resolver._prefetch_datasets"):
+
+        output = dependency_resolver(state)
+
+    resolved = output.get("resolved_dependencies", [])
+
+    # Static imports must be captured and mapped to PyPI package names
+    assert "pandas" in resolved, "Static 'import pandas' must be resolved"
+    assert "torch" in resolved, "Static 'from torch import nn' must be resolved"
+    assert "datasets" in resolved, "Static 'from datasets import ...' must be resolved"
+
+    # Dynamic imports (exec / __import__) must NOT appear as resolved packages
+    # (they are not detectable by AST walking of static import statements)
+    resolved_lower = [r.lower() for r in resolved]
+    assert "scipy" not in resolved_lower, (
+        "__import__('scipy') is a dynamic import and must not appear in resolved_dependencies"
+    )
+
+    # Dataset IDs from load_dataset() calls must be captured
+    resolved_datasets = output.get("resolved_datasets", [])
+    # load_dataset is in the code via 'from datasets import load_dataset' — no call is made here,
+    # but if load_dataset("...") were present, it would be captured
+    assert "dataset_cache_path" in output, "dataset_cache_path must be set in output"
+
+
+def test_state_pruning_pipeline_real_ml_coder_prompt():
+    """ml_coder node: the LLM prompt contains only experiment_spec + hypothesis,
+    never raw arxiv papers or KG entities."""
+    import json
+    import anthropic as _anthropic
+    from backend.agents.ml_coder import ml_coder
+
+    full_state = {
+        "topic": "RF vs XGBoost",
+        "arxiv_papers_full_text": [
+            {
+                "arxiv_id": "2401.00001",
+                "title": "Sensitive Paper",
+                "full_text": {
+                    "methodology": "SECRET_PAPER_CONTENT_THAT_MUST_NOT_LEAK",
+                    "implementation": "",
+                    "results": "",
+                },
+            }
+        ],
+        "kg_entities": [
+            {"id": "e1", "canonical_name": "SENSITIVE_KG_ENTITY",
+             "entity_type": "model", "aliases": [], "attributes": {}}
+        ],
+        "kg_edges": [],
+        "hypothesis": "RF outperforms XGBoost on tabular data",
+        "experiment_spec": {
+            "independent_var": "model_type",
+            "dependent_var": "accuracy",
+            "control_description": "XGBoost baseline",
+            "dataset_id": "iris",
+            "evaluation_metrics": ["accuracy"],
+            "expected_outcome": "RF achieves higher accuracy",
+        },
+        "execution_logs": "SENSITIVE_EXECUTION_LOG_MUST_NOT_APPEAR",
+        "python_code": None,
+    }
+
+    captured_messages = []
+
+    mock_response = MagicMock()
+    mock_response.content = [MagicMock(text="import sklearn\nprint('done')")]
+
+    mock_client = MagicMock()
+    mock_client.messages.create.return_value = mock_response
+
+    def capture_create(**kwargs):
+        captured_messages.append(kwargs)
+        return mock_response
+
+    mock_client.messages.create.side_effect = capture_create
+
+    with patch("backend.agents.ml_coder.anthropic.Anthropic", return_value=mock_client):
+        ml_coder(full_state)
+
+    assert len(captured_messages) == 1, "ml_coder must make exactly one LLM call"
+    call_kwargs = captured_messages[0]
+
+    # Reconstruct full prompt text for inspection
+    prompt_text = " ".join(
+        msg["content"] for msg in call_kwargs.get("messages", [])
+        if isinstance(msg.get("content"), str)
+    )
+
+    assert "SECRET_PAPER_CONTENT_THAT_MUST_NOT_LEAK" not in prompt_text, (
+        "ml_coder must not include arxiv_papers_full_text in the LLM prompt"
+    )
+    assert "SENSITIVE_KG_ENTITY" not in prompt_text, (
+        "ml_coder must not include kg_entities in the LLM prompt"
+    )
+    assert "SENSITIVE_EXECUTION_LOG_MUST_NOT_APPEAR" not in prompt_text, (
+        "ml_coder initial call must not include execution_logs in the LLM prompt"
+    )
+    # Hypothesis and experiment spec must be present
+    assert "RF outperforms XGBoost" in prompt_text
+    assert "iris" in prompt_text
