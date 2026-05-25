@@ -14,7 +14,7 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState
 from backend.utils.llm_utils import extract_json, extract_text
 
@@ -98,7 +98,7 @@ def _first_pass(state: AutoResearchState) -> dict[str, Any]:
     )
 
     response = client.messages.create(
-        model=MODELS.academic_writer,
+        model=effective_model_for("academic_writer"),
         max_tokens=16384,
         system=WRITER_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],
@@ -139,7 +139,7 @@ def _revision_pass(state: AutoResearchState) -> dict[str, Any]:
     )
 
     response = client.messages.create(
-        model=MODELS.academic_writer,
+        model=effective_model_for("academic_writer"),
         max_tokens=16384,
         system=REVISION_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],

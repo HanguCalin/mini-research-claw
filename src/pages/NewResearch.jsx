@@ -26,16 +26,18 @@ export default function NewResearch() {
   const navigate = useNavigate();
   const { startRun } = usePipeline();
   const [config, setConfig] = useState({
-    researcherModel: "haiku",
-    coderModel: "sonnet",
-    writerModel: "sonnet",
+    modelOverride: "",  // empty = use per-node defaults from backend/config.py
     maxRetries: 3,
     maxPapers: 5,
   });
 
   const launch = () => {
     if (!topic.trim()) return;
-    startRun(topic);
+    startRun(topic, {
+      modelOverride: config.modelOverride || null,
+      maxCodeRetries: config.maxRetries,
+      arxivResultsPerRound: config.maxPapers,
+    });
     navigate("/");
   };
 
@@ -113,65 +115,68 @@ export default function NewResearch() {
         </button>
 
         {showAdvanced && (
-          <div className="grid gap-4 animate-slide-in sm:grid-cols-2">
-            {[
-              { key: "researcherModel", label: "Researcher Model" },
-              { key: "coderModel", label: "Coder Model" },
-              { key: "writerModel", label: "Writer Model" },
-            ].map(({ key, label }) => (
-              <div key={key} className="space-y-1.5">
-                <label className="text-xs font-medium text-text-muted">
-                  {label}
-                </label>
-                <select
-                  value={config[key]}
-                  onChange={(e) =>
-                    setConfig((c) => ({ ...c, [key]: e.target.value }))
-                  }
-                  className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-                >
-                  <option value="haiku">Claude 3.5 Haiku</option>
-                  <option value="sonnet">Claude 3.7 Sonnet</option>
-                </select>
-              </div>
-            ))}
-
-            <div className="space-y-1.5">
+          <div className="animate-slide-in space-y-4">
+            <div className="space-y-1.5 sm:col-span-2">
               <label className="text-xs font-medium text-text-muted">
-                Max Retries
+                Model Override (applies to every AI node)
               </label>
-              <input
-                type="number"
-                min={1}
-                max={5}
-                value={config.maxRetries}
+              <select
+                value={config.modelOverride}
                 onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    maxRetries: parseInt(e.target.value) || 3,
-                  }))
+                  setConfig((c) => ({ ...c, modelOverride: e.target.value }))
                 }
-                className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-              />
+                className="w-full cursor-pointer appearance-none rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+              >
+                <option value="">Use per-node defaults (recommended)</option>
+                <option value="claude-haiku-4-5-20251001">claude-haiku-4-5 &mdash; cheap, fast (every node)</option>
+                <option value="claude-sonnet-4-6">claude-sonnet-4-6 &mdash; strongest (every node)</option>
+                <option value="claude-opus-4-7">claude-opus-4-7 &mdash; max quality, slow + expensive</option>
+              </select>
+              <p className="text-[11px] text-text-muted">
+                Defaults pick Haiku for cheap structured tasks (KG extraction,
+                LaTeX repair) and Sonnet for reasoning (hypothesis, coding,
+                writing). Overriding swaps the whole pipeline to one model.
+              </p>
             </div>
 
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-text-muted">
-                Max Papers to Fetch
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                value={config.maxPapers}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    maxPapers: parseInt(e.target.value) || 5,
-                  }))
-                }
-                className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-text-muted">
+                  Max Code Retries (sandbox self-heal loop)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={10}
+                  value={config.maxRetries}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      maxRetries: parseInt(e.target.value, 10) || 0,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-text-muted">
+                  Max Papers per ArXiv Round
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={50}
+                  value={config.maxPapers}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      maxPapers: parseInt(e.target.value, 10) || 5,
+                    }))
+                  }
+                  className="w-full rounded-lg border border-border bg-black/10 px-3 py-2.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+                />
+              </div>
             </div>
           </div>
         )}

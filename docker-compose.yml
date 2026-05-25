@@ -8,7 +8,7 @@ services:
       SUPABASE_URL: ${SUPABASE_URL:-}
       SUPABASE_SERVICE_KEY: ${SUPABASE_SERVICE_KEY:-}
       HUGGINGFACE_TOKEN: ${HUGGINGFACE_TOKEN:-}
-      AUTO_MINI_CLAW_AUTO_APPROVE_HITL: "true"
+      AUTO_MINI_CLAW_HITL_MODE: "api"
       HOST_PROJECT_ROOT: ${PWD}
     volumes:
       - .:/app

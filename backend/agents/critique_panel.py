@@ -17,7 +17,7 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState, DebateEntry
 from backend.utils.llm_utils import extract_json, extract_text
 
@@ -113,15 +113,15 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
 
     # ── Phase 1: Independent critique ────────────────────────────────────
     agents = [
-        ("fact_checker", MODELS.critique_fact_checker, FACT_CHECKER_PROMPT, {
+        ("fact_checker", effective_model_for("critique_fact_checker"), FACT_CHECKER_PROMPT, {
             "kg_entities": json.dumps(kg_entities[:30], indent=2),
             "kg_edges": json.dumps(kg_edges[:50], indent=2),
             "claim_ledger": json.dumps(claim_ledger, indent=2),
         }),
-        ("methodologist", MODELS.critique_methodologist, METHODOLOGIST_PROMPT, {
+        ("methodologist", effective_model_for("critique_methodologist"), METHODOLOGIST_PROMPT, {
             "metrics": json.dumps(metrics, indent=2),
         }),
-        ("formatter", MODELS.critique_formatter, FORMATTER_PROMPT, {}),
+        ("formatter", effective_model_for("critique_formatter"), FORMATTER_PROMPT, {}),
     ]
 
     all_critiques: dict[str, list[dict[str, Any]]] = {}
@@ -165,7 +165,7 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
 
         try:
             response = client.messages.create(
-                model=MODELS.critique_methodologist,
+                model=effective_model_for("critique_methodologist"),
                 max_tokens=2048,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -203,7 +203,7 @@ def critique_panel(state: AutoResearchState) -> dict[str, Any]:
 
         try:
             response = client.messages.create(
-                model=MODELS.critique_methodologist,
+                model=effective_model_for("critique_methodologist"),
                 max_tokens=1024,
                 messages=[{"role": "user", "content": prompt}],
             )

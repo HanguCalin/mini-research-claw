@@ -15,7 +15,7 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState, KGEdge, KGEntity
 from backend.utils.llm_utils import extract_json, extract_text
 from backend.utils.kg_utils import (
@@ -86,7 +86,7 @@ def kg_extractor(state: AutoResearchState) -> dict[str, Any]:
 
         try:
             response = client.messages.create(
-                model=MODELS.kg_extractor,
+                model=effective_model_for("kg_extractor"),
                 max_tokens=4096,
                 system=EXTRACTION_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": paper_text}],

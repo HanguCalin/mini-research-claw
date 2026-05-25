@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 
 from backend import config
 from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_max_code_retries
 from backend.state import AutoResearchState
 from backend.utils.artifact_uploader import (
     create_run,
@@ -85,7 +86,7 @@ def route_executor(state: AutoResearchState) -> str:
     """After Node 5: claim ledger / retry / fail."""
     if state.get("execution_success", False):
         return "claim_ledger_builder"
-    if state.get("code_retry_count", 0) < THRESHOLDS.max_code_retries:
+    if state.get("code_retry_count", 0) < effective_max_code_retries():
         return "ml_coder"
     return END
 
@@ -200,16 +201,21 @@ def get_graph() -> Any:
 # ─── Pipeline runner with artifact-upload finally hook ──────────────────────
 
 
-def run_pipeline(topic: str) -> AutoResearchState:
+def run_pipeline(topic: str, run_id: str | None = None) -> AutoResearchState:
     """End-to-end pipeline invocation.
 
-    Allocates a `run_id`, executes the LangGraph DAG, and uploads artifacts to
-    Supabase Storage on every terminal path (success OR failure OR crash) via
-    a `finally` block — per IMPLEMENTATION_GUIDE §4.4 (the simpler approach).
+    Allocates (or reuses) a ``run_id``, executes the LangGraph DAG, and uploads
+    artifacts to Supabase Storage on every terminal path (success OR failure
+    OR crash) via a ``finally`` block — per IMPLEMENTATION_GUIDE §4.4.
+
+    The API layer passes its client-facing UUID as ``run_id`` so that the same
+    id surfaces in the UI, in ``pipeline_runs.id``, and in the
+    ``artifacts/{run_id}/`` storage folder. CLI callers omit it and get a
+    freshly generated UUID.
     """
     config.assert_env_ready()
 
-    run_id = create_run(topic)
+    run_id = create_run(topic, run_id=run_id)
     logger.info("Starting pipeline run_id=%s topic=%r", run_id, topic)
 
     initial_state: AutoResearchState = {

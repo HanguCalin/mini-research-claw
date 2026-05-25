@@ -13,7 +13,7 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState, ExperimentSpec
 from backend.utils.llm_utils import extract_json, extract_text
 
@@ -78,7 +78,7 @@ def experiment_designer(state: AutoResearchState) -> dict[str, Any]:
     )
 
     response = client.messages.create(
-        model=MODELS.experiment_designer,
+        model=effective_model_for("experiment_designer"),
         max_tokens=2048,
         system=DESIGNER_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],

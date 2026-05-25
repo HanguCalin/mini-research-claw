@@ -1,8 +1,41 @@
-node_modules
-dist
-.git
+# Python
+venv/
+.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+*.egg-info/
+
+# Node / frontend build outputs
+node_modules/
+dist/
+.vite/
+
+# Local caches and runtime artifacts
+.cache/
+.runtime/
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Git / docs / secrets / large outputs
+.git/
 .gitignore
+.gitattributes
+.github/
 .env
-.cache
-.runtime
+.env.*
+!.env.example
 *.md
+papers/
+tests/
+
+# Docker meta (the daemon doesn't need these copied in)
+docker-compose.yml
+Dockerfile
+Dockerfile.*
+.dockerignore

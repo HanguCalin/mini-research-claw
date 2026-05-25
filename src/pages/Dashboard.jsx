@@ -12,8 +12,10 @@ import {
 } from "lucide-react";
 import AgentTimeline from "../components/AgentTimeline";
 import ArtifactDock from "../components/ArtifactDock";
+import GatePanel from "../components/GatePanel";
 import LogPanel from "../components/LogPanel";
 import PaperPreview from "../components/PaperPreview";
+import RunArtifacts from "../components/RunArtifacts";
 import StatCard from "../components/StatCard";
 import { usePipeline } from "../context/usePipeline";
 import { pipelineStages } from "../data/pipelineStages";
@@ -26,9 +28,12 @@ export default function Dashboard() {
     backendRunId,
     backendStatus,
     elapsedSeconds,
+    gateBusy,
     isRunning,
     logs,
+    pendingGate,
     progress,
+    submitGate,
     topic,
   } = usePipeline();
 
@@ -121,6 +126,16 @@ export default function Dashboard() {
                 style={{ width: `${progress}%` }}
               />
             </div>
+            {backendStatus === "success" && backendRunId && (
+              <RunArtifacts runId={backendRunId} variant="success" />
+            )}
+            {backendStatus === "failed" && backendRunId && (
+              <RunArtifacts
+                runId={backendRunId}
+                variant="failure"
+                error={backendError}
+              />
+            )}
           </div>
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -214,6 +229,13 @@ export default function Dashboard() {
         activeStageIndex={activeStageIndex}
         isRunning={isRunning}
       />
+      {pendingGate && (
+        <GatePanel
+          gate={pendingGate}
+          onSubmit={submitGate}
+          busy={gateBusy}
+        />
+      )}
     </div>
   );
 }

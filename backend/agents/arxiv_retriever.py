@@ -20,6 +20,7 @@ import arxiv
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_arxiv_results_per_round
 from backend.state import AutoResearchState
 from backend.utils.embeddings import embed_single
 from backend.utils.supabase_client import get_supabase
@@ -39,7 +40,7 @@ def arxiv_retriever(state: AutoResearchState) -> dict[str, Any]:
     else:
         query = _build_refined_query(state)
 
-    max_results = THRESHOLDS.arxiv_results_per_round
+    max_results = effective_arxiv_results_per_round()
     new_papers: list[dict[str, Any]] = []
 
     search = arxiv.Search(

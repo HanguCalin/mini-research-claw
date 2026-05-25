@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { pipelineStages } from "../data/pipelineStages";
-import { createPipelineRun, getPipelineRun } from "../services/api";
+import {
+  createPipelineRun,
+  getPipelineRun,
+  getPendingGate,
+  submitGateDecision,
+} from "../services/api";
 import { PipelineContext } from "./pipelineContextObject";
 
 const seedLogs = [
@@ -49,8 +54,18 @@ export function PipelineProvider({ children }) {
   const [backendStatus, setBackendStatus] = useState("idle");
   const [backendError, setBackendError] = useState(null);
   const [backendResult, setBackendResult] = useState(null);
+  const [pendingGate, setPendingGate] = useState(null);
+  const [gateBusy, setGateBusy] = useState(false);
+  // Tracks which HITL gates have already been decided (approved or rejected)
+  // for the current run. The visual pipeline blocks at the corresponding
+  // stage until the matching gate is decided, so the animation reflects the
+  // real backend pause instead of racing ahead on a scripted timer.
+  const [gatesDecided, setGatesDecided] = useState({
+    hypothesis: false,
+    experiment: false,
+  });
 
-  const startRun = (nextTopic) => {
+  const startRun = (nextTopic, overrides = {}) => {
     const trimmed = nextTopic.trim();
     if (!trimmed) return;
 
@@ -61,6 +76,8 @@ export function PipelineProvider({ children }) {
     setBackendStatus("queued");
     setBackendError(null);
     setBackendResult(null);
+    setPendingGate(null);
+    setGatesDecided({ hypothesis: false, experiment: false });
     const startTime = Date.now();
     setStartedAt(startTime);
     setElapsedSeconds(0);
@@ -75,7 +92,7 @@ export function PipelineProvider({ children }) {
       ...makeStageLog(firstStage, trimmed, 0),
     ]);
 
-    createPipelineRun(trimmed)
+    createPipelineRun(trimmed, overrides)
       .then((record) => {
         setBackendRunId(record.client_run_id);
         setBackendStatus(record.status);
@@ -113,6 +130,13 @@ export function PipelineProvider({ children }) {
       return undefined;
     }
 
+    // Block the auto-advance at the two HITL gate stages so the visual
+    // pipeline doesn't race past a backend that is still waiting for an
+    // approve/reject decision. Stage 2 ("hypothesis") gates on Gate 1,
+    // stage 3 ("design") gates on Gate 2.
+    if (activeStageIndex === 2 && !gatesDecided.hypothesis) return undefined;
+    if (activeStageIndex === 3 && !gatesDecided.experiment) return undefined;
+
     const timer = window.setTimeout(() => {
       const nextIndex = activeStageIndex + 1;
       setActiveStageIndex(nextIndex);
@@ -149,7 +173,15 @@ export function PipelineProvider({ children }) {
     }, stage.duration);
 
     return () => window.clearTimeout(timer);
-  }, [activeStageIndex, backendRunId, backendStatus, isRunning, topic]);
+  }, [
+    activeStageIndex,
+    backendRunId,
+    backendStatus,
+    gatesDecided.hypothesis,
+    gatesDecided.experiment,
+    isRunning,
+    topic,
+  ]);
 
   useEffect(() => {
     if (!isRunning || !startedAt) return undefined;
@@ -217,6 +249,88 @@ export function PipelineProvider({ children }) {
     return () => window.clearInterval(poll);
   }, [backendRunId, backendStatus]);
 
+  // ─── Poll for pending HITL gates while a run is active ───────────────────
+  useEffect(() => {
+    if (!backendRunId) return undefined;
+    if (backendStatus === "success" || backendStatus === "failed") return undefined;
+
+    const tick = () => {
+      getPendingGate(backendRunId)
+        .then((snapshot) => {
+          if (snapshot?.pending) {
+            setPendingGate((current) => {
+              if (current && current.gate_id === snapshot.gate_id) {
+                return current;
+              }
+              return {
+                gate_id: snapshot.gate_id,
+                run_id: snapshot.run_id,
+                payload: snapshot.payload,
+              };
+            });
+            // Snap the visual pipeline to the gate's stage so the user
+            // sees that we are paused *at* that node, not somewhere later.
+            const gateStageIndex =
+              snapshot.gate_id === "hypothesis" ? 2 : 3;
+            setActiveStageIndex((current) =>
+              current < gateStageIndex ? gateStageIndex : current,
+            );
+          } else {
+            setPendingGate(null);
+          }
+        })
+        .catch(() => {
+          /* transient — next tick retries */
+        });
+    };
+
+    tick();
+    const poll = window.setInterval(tick, 2000);
+    return () => window.clearInterval(poll);
+  }, [backendRunId, backendStatus]);
+
+  const submitGate = ({ action, reason }) => {
+    if (!backendRunId || !pendingGate) return Promise.resolve();
+    const decidedGateId = pendingGate.gate_id;
+    setGateBusy(true);
+    return submitGateDecision(backendRunId, {
+      gateId: decidedGateId,
+      action,
+      reason,
+    })
+      .then(() => {
+        // Unblock the visual pipeline past this gate.
+        setGatesDecided((current) => ({ ...current, [decidedGateId]: true }));
+        setLogs((current) => [
+          ...current,
+          {
+            time: stamp(),
+            level: action === "approve" ? "success" : "warn",
+            agent: pendingGate.gate_id === "hypothesis" ? "hitl_gate" : "hitl_experiment_gate",
+            msg:
+              action === "approve"
+                ? `Gate ${pendingGate.gate_id} approved.`
+                : `Gate ${pendingGate.gate_id} rejected: ${reason}`,
+          },
+        ]);
+        setPendingGate(null);
+      })
+      .catch((error) => {
+        setLogs((current) => [
+          ...current,
+          {
+            time: stamp(),
+            level: "error",
+            agent: "api",
+            msg: `Gate decision failed: ${error.message}`,
+          },
+        ]);
+      })
+      .finally(() => {
+        setGateBusy(false);
+      });
+  };
+
   const stageStates = useMemo(() => {
     return pipelineStages.reduce((states, stage, index) => {
       let status = "idle";
@@ -248,6 +362,9 @@ export function PipelineProvider({ children }) {
     progress,
     stageStates,
     startRun,
+    pendingGate,
+    submitGate,
+    gateBusy,
   };
 
   return (
