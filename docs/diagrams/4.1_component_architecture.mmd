@@ -1,0 +1,106 @@
+graph TD
+    User["👤 User / Human Operator"]
+    CLI["CLI Interface\n(Rich terminal)"]
+    UI["React Web UI\n(artifact viewer + run history)"]
+
+    subgraph Orchestrator["LangGraph Orchestrator"]
+        direction TB
+        ScopedView["build_scoped_view()\nNODE_SCOPE_CONFIG"]
+    end
+
+    subgraph Phase1["Phase 1: Literature & KG"]
+        N1["Node 1: Iterative ArXiv Retriever\n(cache-first lookup)"]
+        N2["Node 2: Epistemic KG Extractor\n(SBERT clustering + LLM dedup\n+ polarity + context_condition)"]
+        N3["Node 3: Incremental Hypothesis Generator\n(novelty scorer + pgvector prior-art screening)"]
+        HITL1["Node 3b: HITL Gate 1\n(Hypothesis Approval)"]
+        N3c["Node 3c: Experimental Designer\n(structured ExperimentSpec)"]
+        HITL2["Node 3d: HITL Gate 2\n(Experiment Approval)"]
+    end
+
+    subgraph Phase2["Phase 2: Experimentation"]
+        N4["Node 4: Constrained ML Coder\n(static imports only + debug injection\n+ ExperimentSpec binding)"]
+        N4b["Node 4b: Dependency Resolver\n(AST parser + host-side pre-cache)"]
+        N5["Node 5: Executor Sandbox\n(Docker --network=none + :ro mounts)"]
+    end
+
+    subgraph Phase3["Phase 3: Drafting"]
+        N5b["Node 5b: Claim Ledger Builder\n(No-Paper gate + context_condition evidence rating)"]
+        N6["Node 6: Academic Writer\n(claim ledger-grounded)"]
+    end
+
+    subgraph Phase4["Phase 4: Critique"]
+        N6b["Node 6b: Deterministic Linter\n(IMRaD + citations + NeurIPS checklist)"]
+        subgraph ReviewPanel["Heterogeneous Review Panel"]
+            AgentA["Agent A: Fact-Checker (Sonnet)\nKG + claim ledger"]
+            AgentB["Agent B: Methodologist (Haiku)\nExperimentSpec compliance"]
+            AgentC["Agent C: Formatter (Haiku)\nsubjective quality"]
+        end
+        N8["Node 8: Critique Aggregator\n(debate-surviving critiques)"]
+        N6r["Node 6: Academic Writer — Revision\n(confidence score + reproducibility checklist)"]
+    end
+
+    subgraph Phase5["Phase 5: Publication"]
+        N9["Node 9: LaTeX Compiler\n(pdflatex + bibtex)"]
+        RepairAgent["LaTeX Repair Agent\n(Claude Haiku 4.5)\nup to 5× loop"]
+        Uploader["Artifact Uploader\n(Supabase Storage)"]
+    end
+
+    subgraph External["External Services"]
+        ArXiv["arXiv API\n(REST + HTML/LaTeX source)"]
+        SBERT["SBERT Embedding Service\n(local inference)"]
+        Anthropic["Anthropic API\n(Claude Opus / Sonnet / Haiku)"]
+        Docker["Docker Daemon\n(sandbox execution)"]
+    end
+
+    subgraph SupabaseCloud["Supabase Cloud"]
+        PG["PostgreSQL + pgvector\n(papers cache + prior-art queries)"]
+        Storage["Storage Bucket: artifacts\n(PDFs + metrics + LaTeX source)"]
+        RunsTable["pipeline_runs table\n(run metadata + status)"]
+    end
+
+    User --> CLI
+    CLI --> Orchestrator
+    Orchestrator --> ScopedView
+    ScopedView --> Phase1
+    ScopedView --> Phase2
+    ScopedView --> Phase3
+    ScopedView --> Phase4
+    ScopedView --> Phase5
+
+    N1 --> N2 --> N3 --> HITL1
+    HITL1 -->|approved| N3c
+    HITL1 -->|rejected| CLI
+    N3c --> HITL2
+    HITL2 -->|approved| N4
+    HITL2 -->|rejected| N3c
+
+    N3 -->|refine search terms| N1
+
+    N4 --> N4b --> N5
+    N5 -->|fail < 3| N4
+    N5 -->|success| N5b
+
+    N5b -->|pass| N6
+    N5b -->|>50% weak| CLI
+
+    N6 --> N6b --> ReviewPanel --> N8 --> N6r
+
+    N6r --> N9
+    N9 -->|failure| RepairAgent
+    RepairAgent -->|loop up to 5x| N9
+    N9 -->|success| Uploader
+
+    N1 <-->|cache-first| PG
+    N3 <-->|pgvector similarity| PG
+    N2 <-->|SBERT embeddings| SBERT
+    N1 <-->|fetch papers| ArXiv
+    N4 --> Anthropic
+    N6 --> Anthropic
+    ReviewPanel --> Anthropic
+    RepairAgent --> Anthropic
+    N5 --> Docker
+    Uploader --> Storage
+    Uploader --> RunsTable
+    UI <-->|artifacts + run history| SupabaseCloud
+    User <-->|HITL review| HITL1
+    User <-->|HITL review| HITL2

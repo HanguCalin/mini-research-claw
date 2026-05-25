@@ -1,0 +1,81 @@
+graph TD
+    subgraph HostMachine["Host Machine"]
+        direction TB
+
+        subgraph PythonEnv["Python Virtual Environment"]
+            Pipeline["Research Claw Pipeline\n(LangGraph + Claude SDK)"]
+            SBERT_local["SBERT Embedding Model\n(local inference — no network)"]
+            DepResolver["Dependency Resolver\n(AST parser + wheel pre-fetcher)"]
+        end
+
+        subgraph HostCache["Host-Side Cache (read-only mount into sandbox)"]
+            PipCache[".cache/pip\n(pre-compiled wheels)"]
+            HFCache[".cache/hf\n(Hugging Face datasets)"]
+            SklearnCache[".cache/sklearn\n(sklearn artifacts)"]
+        end
+
+        subgraph DockerDaemon["Docker Daemon"]
+            subgraph Sandbox["Executor Sandbox Container\n(--network=none)"]
+                PythonSandbox["Python Runtime\n(data science libs — pre-compiled only\nno C compilers, no network)"]
+                VolPip["← .cache/pip :ro"]
+                VolHF["← .cache/hf :ro"]
+                VolSklearn["← .cache/sklearn :ro"]
+            end
+        end
+
+        LaTeX["LaTeX Toolchain\n(pdflatex + bibtex)\nRepair loop up to 5×"]
+        RichCLI["Rich CLI\nDual HITL interaction\n(hypothesis + experiment gates)"]
+    end
+
+    subgraph AnthropicCloud["Anthropic API"]
+        OpusAgent["Claude Opus\n(orchestration + writing)"]
+        SonnetAgent["Claude Sonnet\n(fact-checking reviewer)"]
+        HaikuAgent["Claude Haiku 4.5\n(methodologist + formatter\n+ LaTeX repair agent)"]
+    end
+
+    subgraph ArXivService["arXiv"]
+        ArXivREST["REST API\n(paper search + metadata)"]
+        ArXivSrc["HTML/LaTeX source\n(full-text download)"]
+    end
+
+    subgraph SupabaseCloud["Supabase Cloud"]
+        direction TB
+        PG["PostgreSQL\n+ pgvector extension\n(papers cache + embeddings\n+ prior-art cosine queries)"]
+        StorageBucket["Storage Bucket: artifacts\n(PDFs · metrics · claim ledgers\n· LaTeX source)"]
+        RunsTable["pipeline_runs table\n(topic · status · timestamps\n· artifact URLs)"]
+    end
+
+    subgraph Frontend["React Web UI"]
+        WebUI["Run History Browser\n+ Artifact Viewer"]
+    end
+
+    HumanOperator["👤 Human Operator\n(HITL Gate 1 + Gate 2)"]
+
+    Pipeline --> SBERT_local
+    Pipeline --> DepResolver
+    DepResolver --> PipCache
+    DepResolver --> HFCache
+    DepResolver --> SklearnCache
+
+    Pipeline -->|"submit code + deps"| Sandbox
+    PipCache -->|":ro mount"| Sandbox
+    HFCache -->|":ro mount"| Sandbox
+    SklearnCache -->|":ro mount"| Sandbox
+    Sandbox -->|"execution_logs + metrics_json"| Pipeline
+
+    Pipeline -->|"API calls (multi-agent)"| AnthropicCloud
+    Pipeline <-->|"cache lookup + pgvector queries"| PG
+    Pipeline <-->|"paper search + full-text"| ArXivService
+
+    Pipeline --> LaTeX
+    LaTeX -->|"repair loop"| HaikuAgent
+
+    Pipeline -->|"upload artifacts"| StorageBucket
+    Pipeline -->|"update run metadata"| RunsTable
+
+    RichCLI <-->|"HITL prompts + responses"| HumanOperator
+    Pipeline <-->|"hypothesis / experiment approval"| RichCLI
+
+    WebUI <-->|"fetch run history + artifact URLs"| RunsTable
+    WebUI <-->|"download artifacts"| StorageBucket
+    HumanOperator -->|"browser"| WebUI

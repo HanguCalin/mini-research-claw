@@ -1,0 +1,164 @@
+sequenceDiagram
+    actor User as User / Human Operator
+    participant CLI as CLI (Rich)
+    participant LG as LangGraph Orchestrator
+    participant N1 as Node 1: ArXiv Retriever
+    participant Supabase as Supabase (PostgreSQL + pgvector)
+    participant ArXiv as arXiv API
+    participant SBERT as SBERT Embedding Service
+    participant N2 as Node 2: KG Extractor
+    participant N3 as Node 3: Hypothesis Generator
+    participant HITL1 as HITL Gate 1 (Hypothesis)
+    participant N3c as Experimental Designer
+    participant HITL2 as HITL Gate 2 (Experiment)
+    participant N4 as Node 4: ML Coder
+    participant N4b as Node 4b: Dependency Resolver
+    participant Docker as Executor Sandbox (Docker)
+    participant N5b as Node 5b: Claim Ledger Builder
+    participant N6 as Node 6: Academic Writer
+    participant Linter as Deterministic Linter
+    participant Panel as Review Panel (3 agents)
+    participant N8 as Critique Aggregator
+    participant N9 as LaTeX Compiler
+    participant Repair as LaTeX Repair Agent
+    participant Upload as Artifact Uploader
+    participant Storage as Supabase Storage
+
+    User->>CLI: run_pipeline(topic)
+    CLI->>LG: invoke(topic)
+    LG->>N1: retrieve_papers(topic)
+
+    loop Iterative retrieval rounds
+        N1->>Supabase: cache lookup (paper hash)
+        alt cache hit
+            Supabase-->>N1: cached paper + embedding
+        else cache miss
+            N1->>ArXiv: fetch papers (REST + HTML/LaTeX source)
+            ArXiv-->>N1: paper list + full text
+            N1->>SBERT: embed(abstract)
+            SBERT-->>N1: embedding vector
+            N1->>Supabase: INSERT paper + embedding
+        end
+        N1-->>LG: arxiv_papers_full_text
+    end
+
+    LG->>N2: extract_kg(papers)
+    N2->>SBERT: embed(entities) for clustering
+    SBERT-->>N2: entity embeddings
+    N2->>N2: SBERT cluster + LLM dedup pass
+    N2-->>LG: kg_entities, kg_edges (polarity + context_condition)
+
+    LG->>N3: generate_hypothesis(kg)
+    N3->>SBERT: embed(hypothesis)
+    SBERT-->>N3: hypothesis_embedding
+    N3->>Supabase: pgvector cosine similarity (prior-art screening)
+    Supabase-->>N3: prior_art_similarity_score
+    N3-->>LG: hypothesis + novelty_score + incremental_delta
+
+    alt novelty < threshold OR prior_art ≥ ceiling
+        LG-->>CLI: END — failed_novelty
+    else KG invalid (hallucination)
+        LG->>N3: regenerate_hypothesis
+    else valid + novel
+        LG->>N3: refine search terms → back to N1 (iterative loop)
+    end
+
+    LG->>HITL1: present_hypothesis(hypothesis, novelty_score)
+    HITL1->>User: display hypothesis for review
+    User-->>HITL1: approve / reject
+    alt rejected
+        HITL1-->>CLI: END — failed_hitl_rejected
+    else approved
+        HITL1-->>LG: hitl_approved = true
+    end
+
+    LG->>N3c: design_experiment(hypothesis, kg)
+    N3c-->>LG: experiment_spec (structured ExperimentSpec)
+
+    LG->>HITL2: present_experiment(experiment_spec)
+    HITL2->>User: display experiment design for review
+    User-->>HITL2: approve / reject
+    alt rejected
+        HITL2-->>LG: redesign → N3c (or abort)
+    else approved
+        HITL2-->>LG: hitl_experiment_approved = true
+    end
+
+    loop Self-healing retry (up to 3×)
+        LG->>N4: generate_code(experiment_spec, hypothesis)
+        Note over N4: static imports only<br/>debug instrumentation injected<br/>scoped view: experiment_spec + hypothesis
+        N4-->>LG: python_code + debug_instrumentation
+
+        LG->>N4b: resolve_dependencies(python_code)
+        N4b->>N4b: AST parse → extract imports
+        N4b->>N4b: pre-fetch wheels + HF datasets on host
+        N4b-->>LG: resolved_dependencies, dataset_cache_path
+
+        LG->>Docker: execute_code(code, deps, cache :ro mount)
+        Note over Docker: --network=none<br/>.cache/pip :ro<br/>.cache/hf :ro<br/>.cache/sklearn :ro
+        Docker-->>LG: execution_logs + metrics_json + success/fail
+
+        alt execution success
+            LG->>N5b: build_claim_ledger(metrics, kg, papers)
+        else execution fail
+            LG->>N4: retry with debug logs
+        end
+    end
+
+    alt fail ≥ 3 retries
+        LG-->>CLI: END — failed_execution (failure report)
+    end
+
+    N5b->>N5b: evaluate evidence quality
+    Note over N5b: No-Paper gate:<br/>>50% weak/unsupported claims → abort
+    alt insufficient evidence
+        N5b-->>CLI: END — no_paper
+    else pass
+        N5b-->>LG: claim_ledger (ClaimLedgerEntry list)
+    end
+
+    LG->>N6: write_paper(claim_ledger, metrics_json, experiment_spec, incremental_delta)
+    Note over N6: scoped view: claim_ledger<br/>+ metrics_json + experiment_spec<br/>+ incremental_delta
+    N6-->>LG: latex_draft + bibtex_source
+
+    LG->>Linter: lint(latex_draft, claim_ledger)
+    Note over Linter: IMRaD structure<br/>citations<br/>claim-ledger compliance<br/>NeurIPS checklist
+    Linter-->>LG: critique_warnings
+
+    LG->>Panel: review(latex_draft, kg, claim_ledger, experiment_spec)
+    Note over Panel: Agent A (Sonnet): fact-check vs KG + claim ledger<br/>Agent B (Haiku): ExperimentSpec compliance<br/>Agent C (Haiku): subjective quality
+    Panel->>Panel: 1. Independent critiques
+    Panel->>Panel: 2. Cross-challenge phase
+    Panel->>Panel: 3. Defend-or-retract phase
+    Panel-->>LG: surviving_critiques + debate_log
+
+    LG->>N8: aggregate(critique_warnings, surviving_critiques)
+    N8-->>LG: consolidated critique list
+
+    LG->>N6: revise_paper(critique, claim_ledger)
+    N6-->>LG: revised latex_draft + confidence_score + reproducibility_checklist
+
+    loop LaTeX repair loop (up to 5×)
+        LG->>N9: compile(latex_draft, bibtex_source)
+        N9->>N9: pdflatex + bibtex
+        alt compile success
+            N9-->>LG: final_pdf_path
+        else compile failure
+            N9-->>Repair: .log (line + error + context)
+            Repair->>Repair: line-level patch (Claude Haiku 4.5)
+            Repair-->>LG: patched latex_draft
+        end
+    end
+
+    alt exhausted repair attempts
+        LG-->>CLI: END — failed_latex
+    end
+
+    LG->>Upload: upload_artifacts(pdf, metrics, claim_ledger, latex_source)
+    Upload->>Storage: PUT objects to artifacts bucket
+    Storage-->>Upload: artifact_urls
+    Upload->>Supabase: UPDATE pipeline_runs (status=success, artifact_urls)
+    Upload-->>LG: artifact_urls
+
+    LG-->>CLI: pipeline complete (artifact_urls, confidence_score)
+    CLI-->>User: display results + links

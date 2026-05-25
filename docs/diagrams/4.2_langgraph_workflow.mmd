@@ -1,0 +1,89 @@
+flowchart TD
+    START(["START"])
+
+    subgraph P1["Phase 1 — Iterative Literature & Epistemic KG"]
+        N1["Node 1\nIterative ArXiv Retriever\nSupabase cache-first lookup"]
+        N2["Node 2\nEpistemic KG Extractor\nSchema extraction · SBERT clustering\nLLM dedup · polarity\ncontext_condition boundaries"]
+        N3["Node 3\nIncremental Hypothesis Generator"]
+        N3_loop{{"novelty &\nKG valid?"}}
+        N3b["Node 3b — HITL Gate 1\nHypothesis Approval"]
+        HITL1_check{{"Human\ndecision"}}
+        N3c["Node 3c\nExperimental Designer\nstructured ExperimentSpec"]
+        N3d["Node 3d — HITL Gate 2\nExperiment Approval"]
+        HITL2_check{{"Human\ndecision"}}
+    end
+
+    subgraph P2["Phase 2 — Experimentation"]
+        N4["Node 4\nConstrained ML Coder\nstatic imports only · debug injection\nbound to ExperimentSpec\nscoped view: experiment_spec + hypothesis"]
+        N4b["Node 4b\nDependency Resolver\nAST parse → pre-fetch deps\nHF datasets on host"]
+        N5["Node 5\nExecutor Sandbox\nDocker --network=none\n.cache mounted as :ro"]
+        N5_check{{"execution\nresult?"}}
+    end
+
+    subgraph P3["Phase 3 — Paper Drafting"]
+        N5b["Node 5b\nClaim Ledger Builder\nNo-Paper gate\ncontext_condition evidence rating"]
+        N5b_check{{"evidence\nquality?"}}
+        N6["Node 6\nAcademic Writer\nclaim ledger-grounded\nscoped view: claim_ledger\n+ metrics_json + experiment_spec\n+ incremental_delta"]
+    end
+
+    subgraph P4["Phase 4 — Critique"]
+        N6b["Node 6b\nDeterministic Linter\nIMRaD · citations · claim-ledger\ncompliance · NeurIPS checklist"]
+        subgraph Panel["Heterogeneous Review Panel"]
+            direction LR
+            AgA["Agent A: Fact-Checker (Sonnet)\nKG + claim ledger"]
+            AgB["Agent B: Methodologist (Haiku)\nExperimentSpec compliance"]
+            AgC["Agent C: Formatter (Haiku)\nsubjective quality"]
+        end
+        Debate["Structured Debate Protocol\n1. Independent critiques\n2. Cross-challenge\n3. Defend-or-retract\n4. Surviving critiques forwarded"]
+        N8["Node 8\nCritique Aggregator\nlinter warnings + debate-surviving critiques"]
+        N6r["Node 6 — Revision Pass\n+ Confidence Score 1–10\n+ NeurIPS Reproducibility Checklist"]
+    end
+
+    subgraph P5["Phase 5 — Publication"]
+        N9["Node 9\nLaTeX Compiler\npdflatex + bibtex"]
+        N9_check{{"compile\nresult?"}}
+        RepairAgent["LaTeX Repair Agent\nClaude Haiku 4.5\nparse .log → line + error + context\nline-level patch"]
+        RepairCount{{"attempts\n< 5?"}}
+        Upload["Artifact Upload\nUpload to Supabase Storage\nUpdate pipeline_runs row"]
+    end
+
+    END_success(["END ✓"])
+    END_novelty(["END — failed_novelty"])
+    END_hitl(["END — failed_hitl_rejected"])
+    END_exec(["END — failed_execution\nfailure report"])
+    END_nopaper(["END — no_paper\ninsufficient evidence"])
+    END_latex(["END — failed_latex"])
+
+    START --> N1 --> N2 --> N3 --> N3_loop
+    N3_loop -->|"KG valid + novel"| N3b
+    N3_loop -->|"KG invalid (hallucination)"| N3
+    N3_loop -->|"novelty < threshold\nOR prior_art ≥ ceiling"| END_novelty
+    N3 -->|"refine search terms\nfrom hypothesis"| N1
+
+    N3b --> HITL1_check
+    HITL1_check -->|approved| N3c
+    HITL1_check -->|rejected| END_hitl
+
+    N3c --> N3d --> HITL2_check
+    HITL2_check -->|approved| N4
+    HITL2_check -->|rejected| N3c
+
+    N4 --> N4b --> N5 --> N5_check
+    N5_check -->|"success"| N5b
+    N5_check -->|"fail < 3 retries"| N4
+    N5_check -->|"fail ≥ 3 retries"| END_exec
+
+    N5b --> N5b_check
+    N5b_check -->|"pass"| N6
+    N5b_check -->|">50% weak/unsupported"| END_nopaper
+
+    N6 --> N6b --> Panel
+    AgA & AgB & AgC --> Debate --> N8 --> N6r
+
+    N6r --> N9 --> N9_check
+    N9_check -->|success| Upload
+    N9_check -->|failure| RepairAgent --> RepairCount
+    RepairCount -->|yes| N9
+    RepairCount -->|"no — exhausted"| END_latex
+
+    Upload --> END_success

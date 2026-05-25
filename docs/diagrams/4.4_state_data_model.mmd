@@ -1,0 +1,131 @@
+classDiagram
+    class AutoResearchState {
+        <<TypedDict — LangGraph State>>
+        +str topic
+
+        %% Phase 1: Deep Context & Epistemic KG
+        +List~Dict~ arxiv_papers_full_text
+        +int retrieval_round
+        +List~KGEntity~ kg_entities
+        +List~KGEdge~ kg_edges
+        +str hypothesis
+        +str incremental_delta
+        +List~float~ hypothesis_embedding
+        +float novelty_score
+        +float prior_art_similarity_score
+        +bool novelty_passed
+
+        %% HITL Gate 1
+        +bool hitl_approved
+        +str hitl_rejection_reason
+
+        %% Experiment Design
+        +ExperimentSpec experiment_spec
+        +bool hitl_experiment_approved
+
+        %% Phase 2: Experimentation
+        +str python_code
+        +List~str~ resolved_dependencies
+        +List~str~ resolved_datasets
+        +str dataset_cache_path
+        +str debug_instrumentation
+        +bool execution_success
+        +str execution_logs
+        +str metrics_json
+        +int code_retry_count
+
+        %% Phase 3 & 4: Drafting, Critique, Debate
+        +List~ClaimLedgerEntry~ claim_ledger
+        +str latex_draft
+        +str bibtex_source
+        +List~Dict~ critique_warnings
+        +List~DebateEntry~ debate_log
+        +List~Dict~ surviving_critiques
+        +float confidence_score
+        +bool revision_pass_done
+
+        %% Phase 5: Compilation & Repair
+        +str latex_compile_log
+        +int latex_repair_attempts
+        +Optional~str~ final_pdf_path
+
+        %% Supabase Integration
+        +str run_id
+        +Dict~str_str~ artifact_urls
+
+        %% Telemetry
+        +str pipeline_status
+        +int total_api_calls
+        +int total_tokens_used
+        +List~str~ logs
+    }
+
+    class KGEntity {
+        +str id
+        +str name
+        +str type
+        +List~float~ embedding
+        +str canonical_name
+    }
+
+    class KGEdge {
+        +str source_id
+        +str target_id
+        +str relation
+        +str polarity
+        +str context_condition
+        +str paper_id
+    }
+
+    class ExperimentSpec {
+        +str hypothesis
+        +str methodology
+        +List~str~ datasets
+        +List~str~ metrics
+        +List~str~ baselines
+        +str expected_outcome
+        +str compute_budget
+    }
+
+    class ClaimLedgerEntry {
+        +str claim_id
+        +str claim_text
+        +str source_paper_id
+        +str kg_edge_id
+        +str evidence_strength
+        +str context_condition
+        +float metrics_value
+        +str support_level
+    }
+
+    class DebateEntry {
+        +str round
+        +str agent_id
+        +str critique_id
+        +str content
+        +str action
+    }
+
+    class PipelineStatus {
+        <<enumeration>>
+        running
+        awaiting_hitl_hyp
+        awaiting_hitl_exp
+        success
+        failed_novelty
+        failed_hitl
+        failed_execution
+        failed_latex
+        no_paper
+    }
+
+    AutoResearchState "1" --> "*" KGEntity : kg_entities
+    AutoResearchState "1" --> "*" KGEdge : kg_edges
+    AutoResearchState "1" --> "1" ExperimentSpec : experiment_spec
+    AutoResearchState "1" --> "*" ClaimLedgerEntry : claim_ledger
+    AutoResearchState "1" --> "*" DebateEntry : debate_log
+    AutoResearchState "1" --> "1" PipelineStatus : pipeline_status
+
+    KGEdge --> KGEntity : source / target
+    ClaimLedgerEntry --> KGEdge : references
+    ClaimLedgerEntry --> ExperimentSpec : grounded in
