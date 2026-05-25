@@ -53,6 +53,9 @@ env/
 # Pipeline caches (host-side artifacts pre-fetched for the network=none sandbox)
 .cache/
 
+# Docker sandbox runtime (owned by the docker daemon — never committable)
+.runtime/
+
 # Local pipeline outputs (PDFs, .tex, metrics, debug logs)
 artifacts/
 runs/

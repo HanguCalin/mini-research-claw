@@ -17,6 +17,7 @@ from rich.text import Text
 
 from backend.config import THRESHOLDS
 from backend.state import AutoResearchState
+from backend.utils import hitl_bridge
 
 console = Console()
 
@@ -26,6 +27,45 @@ def _auto_approve_enabled() -> bool:
         "1",
         "true",
         "yes",
+    }
+
+
+def _build_review_payload(state: AutoResearchState) -> dict[str, Any]:
+    """Serialise the same review surface the CLI prints, for the UI bridge."""
+    kg_entities = state.get("kg_entities", [])
+    kg_edges = state.get("kg_edges", [])
+    papers = state.get("arxiv_papers_full_text", [])
+    entity_map = {e["id"]: e["canonical_name"] for e in kg_entities}
+
+    novelty = float(state.get("novelty_score", 0.0))
+    prior_art = float(state.get("prior_art_similarity_score", 0.0))
+    return {
+        "hypothesis": state.get("hypothesis", ""),
+        "incremental_delta": state.get("incremental_delta", ""),
+        "novelty": {
+            "score": novelty,
+            "threshold": THRESHOLDS.novelty_threshold,
+            "pass": novelty >= THRESHOLDS.novelty_threshold,
+        },
+        "prior_art": {
+            "similarity": prior_art,
+            "ceiling": THRESHOLDS.prior_art_ceiling,
+            "pass": prior_art < THRESHOLDS.prior_art_ceiling,
+        },
+        "kg_triples": [
+            {
+                "source": entity_map.get(e["source_id"], "?"),
+                "relation": e["relation"],
+                "target": entity_map.get(e["target_id"], "?"),
+                "polarity": e["polarity"],
+            }
+            for e in kg_edges[:10]
+        ],
+        "papers": [
+            {"arxiv_id": p.get("arxiv_id", "?"), "title": p.get("title", "?")}
+            for p in papers[:8]
+        ],
+        "paper_total": len(papers),
     }
 
 
@@ -116,6 +156,24 @@ def hitl_gate(state: AutoResearchState) -> dict[str, Any]:
             "pipeline_status": "approved_hypothesis",
         }
 
+    # API mode: hand the review payload to the UI bridge and wait.
+    if hitl_bridge.current_mode() == "api" and hitl_bridge.get_run_id():
+        decision = hitl_bridge.await_decision(
+            gate_id="hypothesis",
+            payload=_build_review_payload(state),
+        )
+        if decision["action"] == "approve":
+            return {
+                "hitl_approved": True,
+                "pipeline_status": "approved_hypothesis",
+            }
+        return {
+            "hitl_approved": False,
+            "hitl_rejection_reason": decision.get("reason") or "No reason provided",
+            "pipeline_status": "failed_hitl_rejected",
+        }
+
+    # CLI mode (terminal stdin).
     console.print("\n[bold]Enter [green]approve[/green] or [red]reject <reason>[/red]:[/bold]")
     user_input = input("> ").strip()
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_max_code_retries
 from backend.state import AutoResearchState
 from backend.utils.docker_utils import run_sandboxed
 
@@ -37,10 +37,10 @@ def executor(state: AutoResearchState) -> dict[str, Any]:
         }
 
     retry_count += 1
-    logger.warning("Execution failed (attempt %d/%d)",
-                    retry_count, THRESHOLDS.max_code_retries)
+    max_retries = effective_max_code_retries()
+    logger.warning("Execution failed (attempt %d/%d)", retry_count, max_retries)
 
-    if retry_count >= THRESHOLDS.max_code_retries:
+    if retry_count >= max_retries:
         return {
             "execution_success": False,
             "execution_logs": logs,

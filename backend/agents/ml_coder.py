@@ -14,7 +14,7 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState
 
 logger = logging.getLogger(__name__)
@@ -94,7 +94,7 @@ def ml_coder(state: AutoResearchState) -> dict[str, Any]:
         )
 
     response = client.messages.create(
-        model=MODELS.ml_coder,
+        model=effective_model_for("ml_coder"),
         max_tokens=8192,
         system=system,
         messages=[{"role": "user", "content": user_prompt}],

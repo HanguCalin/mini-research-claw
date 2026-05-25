@@ -14,7 +14,8 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS, THRESHOLDS
+from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState
 from backend.utils.llm_utils import extract_json, extract_text
 from backend.utils.latex_utils import (
@@ -116,7 +117,7 @@ def _get_repair_patch(error: Any) -> dict[str, Any] | None:
 
     try:
         response = client.messages.create(
-            model=MODELS.latex_repair,
+            model=effective_model_for("latex_repair"),
             max_tokens=512,
             system=REPAIR_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": error_context}],

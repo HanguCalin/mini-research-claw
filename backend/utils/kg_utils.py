@@ -13,7 +13,8 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS, THRESHOLDS
+from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import KGEdge, KGEntity
 from backend.utils.embeddings import find_synonym_clusters
 from backend.utils.llm_utils import extract_json, extract_text
@@ -65,7 +66,7 @@ def _llm_pick_canonical(
         indent=2,
     )
     response = client.messages.create(
-        model=MODELS.kg_dedup,
+        model=effective_model_for("kg_dedup"),
         max_tokens=256,
         system=(
             "You are merging duplicate knowledge graph entities. "

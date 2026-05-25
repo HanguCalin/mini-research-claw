@@ -12,7 +12,8 @@ from typing import Any
 
 import anthropic
 
-from backend.config import MODELS, THRESHOLDS
+from backend.config import THRESHOLDS
+from backend.utils.run_overrides import effective_model_for
 from backend.state import AutoResearchState
 from backend.utils.embeddings import embed_single
 from backend.utils.llm_utils import extract_json, extract_text
@@ -58,7 +59,7 @@ def hypothesis_generator(state: AutoResearchState) -> dict[str, Any]:
     )
 
     response = client.messages.create(
-        model=MODELS.hypothesis_generator,
+        model=effective_model_for("hypothesis_generator"),
         max_tokens=2048,
         system=HYPOTHESIS_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_prompt}],

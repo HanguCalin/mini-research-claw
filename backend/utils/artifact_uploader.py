@@ -17,9 +17,15 @@ from backend.state import AutoResearchState
 from backend.utils.supabase_client import get_supabase
 
 
-def create_run(topic: str) -> str:
-    """Insert a new pipeline_runs row with status='running'. Returns run_id."""
-    run_id = str(uuid.uuid4())
+def create_run(topic: str, run_id: str | None = None) -> str:
+    """Insert a new pipeline_runs row with status='running'. Returns run_id.
+
+    If *run_id* is provided (typically by the FastAPI layer's
+    ``client_run_id``), use it as-is so the API id, the ``pipeline_runs.id``
+    row, and the ``artifacts/{run_id}/`` storage folder all share one UUID.
+    Otherwise generate a fresh one — preserves the CLI behaviour.
+    """
+    run_id = run_id or str(uuid.uuid4())
     sb = get_supabase()
     sb.table(PIPELINE_RUNS_TABLE).insert({
         "id": run_id,
