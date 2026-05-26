@@ -2,7 +2,22 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# pdflatex + bibtex + every LaTeX package the Academic Writer typically
+# emits (amsmath, booktabs, hyperref, graphicx, natbib, microtype,
+# subcaption, enumitem, lmodern for the microtype-expansion fix, etc.).
+# Adds ~450 MB to the image but Node 9 (latex_compiler) is non-negotiable.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        texlive-latex-base \
+        texlive-latex-recommended \
+        texlive-latex-extra \
+        texlive-fonts-recommended \
+        texlive-bibtex-extra \
+        lmodern \
+        biber \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

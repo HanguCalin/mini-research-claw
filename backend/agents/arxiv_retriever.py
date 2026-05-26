@@ -15,7 +15,6 @@ import logging
 import re
 import time
 from typing import Any
-
 import arxiv
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -26,6 +25,13 @@ from backend.utils.embeddings import embed_single
 from backend.utils.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
+
+# arXiv enforces a longer-window rate cap than its own ToS-recommended 3s
+# delay. When a session has been hammering the API for hours (multiple back-
+# to-back runs), the very first request of the next run can return 429
+# before any per-request delay even applies. Retry with growing backoff
+# instead of crashing the pipeline at retrieval_round=0.
+_ARXIV_429_BACKOFF_SECONDS = (45.0, 120.0, 300.0)
 
 
 def arxiv_retriever(state: AutoResearchState) -> dict[str, Any]:
@@ -49,9 +55,14 @@ def arxiv_retriever(state: AutoResearchState) -> dict[str, Any]:
         sort_by=arxiv.SortCriterion.Relevance,
     )
 
-    client = arxiv.Client()
+    client = arxiv.Client(
+        num_retries=5,
+        delay_seconds=THRESHOLDS.arxiv_rate_limit_seconds,
+    )
 
-    for result in client.results(search):
+    results = _fetch_with_429_backoff(client, search)
+
+    for result in results:
         aid = _extract_arxiv_id(result.entry_id)
         if aid in existing_ids:
             continue
@@ -74,6 +85,46 @@ def arxiv_retriever(state: AutoResearchState) -> dict[str, Any]:
 
 
 # ─── Internal helpers ────────────────────────────────────────────────────────
+
+
+def _fetch_with_429_backoff(
+    client: arxiv.Client,
+    search: arxiv.Search,
+) -> list[arxiv.Result]:
+    """Materialise ``client.results(search)`` with backoff for HTTP 429.
+
+    ``arxiv.Client`` has its own per-request retry, but a session-wide cap
+    requires a longer cool-down (tens of seconds, not the 3 s ToS delay).
+    On 429 we sleep through the schedule in ``_ARXIV_429_BACKOFF_SECONDS``
+    and re-issue the search from scratch. If every backoff attempt still
+    returns 429, we raise a clean ``RuntimeError`` that the pipeline's
+    top-level handler will surface in ``failure_report.json``.
+    """
+    logger.info("_fetch_with_429_backoff ENTERED (proof the new code is live)")
+    last_exc: Exception | None = None
+    attempts = (0.0, *_ARXIV_429_BACKOFF_SECONDS)
+    for attempt, wait_before in enumerate(attempts):
+        if wait_before:
+            logger.warning(
+                "arXiv 429 — sleeping %.0fs before retry %d/%d",
+                wait_before, attempt, len(_ARXIV_429_BACKOFF_SECONDS),
+            )
+            time.sleep(wait_before)
+        try:
+            return list(client.results(search))
+        except arxiv.HTTPError as exc:
+            # arxiv.HTTPError is the library's own class (NOT urllib's);
+            # its rate-limit code lives in .status_code.
+            if getattr(exc, "status_code", None) != 429:
+                raise
+            last_exc = exc
+    raise RuntimeError(
+        "arXiv rate limit (HTTP 429) persisted after "
+        f"{len(_ARXIV_429_BACKOFF_SECONDS)} backoff retries totalling "
+        f"~{int(sum(_ARXIV_429_BACKOFF_SECONDS))}s. The session has likely "
+        "exceeded arXiv's longer-window cap; wait ~15 minutes before "
+        "starting another run."
+    ) from last_exc
 
 
 def _build_refined_query(state: AutoResearchState) -> str:
