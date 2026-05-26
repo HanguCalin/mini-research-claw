@@ -139,7 +139,7 @@ Pipeline**. The pipeline will pause at two HITL gates for your approval before a
 compute is spent, then run to completion (or terminate cleanly with a `no_paper`
 result if the evidence is too weak).
 
-### Good first topics (all sklearn-native, all run in <5 minutes)
+### Good first topics (all sklearn-native, all run in <20 minutes)
 
 - *"Effect of `max_depth` on Decision Tree classifier accuracy on sklearn iris with 5-fold stratified CV"*
 - *"Compare Bagging, AdaBoost, and Gradient Boosting on sklearn digits — accuracy, training time, and overfitting gap"*
